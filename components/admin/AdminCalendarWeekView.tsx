@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BUSINESS_TIMEZONE } from "@/lib/booking/business-timezone";
 import { formatBookingTimeFromIso, isoToChicagoDateStr } from "@/lib/booking/format-booking-datetime";
+import { getOperatingEndHour, getOperatingStartHour } from "@/lib/booking/customer-operations";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -11,13 +12,14 @@ import { getSlotStartEnd, getCentralCalendarDayBounds } from "@/lib/booking/expe
 const CHICAGO = BUSINESS_TIMEZONE;
 /** `<input type="datetime-local" />` step in seconds — 10-minute increments for block start/end. */
 const BLOCK_DATETIME_LOCAL_STEP_SECONDS = 600;
-const HOUR_START = 7;
-const HOUR_END = 21; // 9 pm
+const HOUR_START = getOperatingStartHour();
+/** Inclusive display end: match slot operating window (already end-exclusive from config helpers). */
+const HOUR_END = Math.max(HOUR_START + 1, Math.ceil(getOperatingEndHour()));
 const HOURS = Array.from({ length: HOUR_END - HOUR_START }, (_, i) => HOUR_START + i);
 const CELL_H = 56; // px per hour
 const TOTAL_GRID_H = HOURS.length * CELL_H;
 
-/** Minutes since HOUR_START (7am) in America/Mazatlan for an ISO string. */
+/** Minutes since HOUR_START in the business timezone for an ISO string. */
 function minutesSinceHourStartChicago(iso: string): number {
   const d = new Date(iso);
   const parts = new Intl.DateTimeFormat("en-US", {

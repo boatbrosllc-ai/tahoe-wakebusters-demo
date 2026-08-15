@@ -129,7 +129,7 @@ function parseBody(
   cancellationSummary: string;
   testimonials: { name: string; quote: string; date?: string }[];
   featured: boolean;
-  spotsLeftOverride: number;
+  spotsLeftOverride: number | null;
   defaultRateId: string;
   bookingPosition: "sidebar" | "inline" | "modal";
   galleryAltTexts: string[];
@@ -147,6 +147,7 @@ function parseBody(
   allowDeposit: boolean;
   allowTipNow?: boolean;
   allowTipLater?: boolean;
+  showSpotsRemaining?: boolean;
   heroImagePosition?: string;
   listingCardImagePosition?: string;
 }> | null {
@@ -276,13 +277,16 @@ function parseBody(
       .filter((t) => t.name || t.quote);
   }
   if (typeof b.featured === "boolean") out.featured = b.featured;
-  if (typeof b.spotsLeftOverride === "number" && b.spotsLeftOverride >= 0) out.spotsLeftOverride = b.spotsLeftOverride;
+  if (Object.prototype.hasOwnProperty.call(b, "spotsLeftOverride")) {
+    if (b.spotsLeftOverride === null) out.spotsLeftOverride = null;
+    else if (typeof b.spotsLeftOverride === "number" && b.spotsLeftOverride >= 0) out.spotsLeftOverride = b.spotsLeftOverride;
+  }
   if (typeof b.defaultRateId === "string") out.defaultRateId = b.defaultRateId.trim();
   if (b.bookingPosition === "sidebar" || b.bookingPosition === "inline" || b.bookingPosition === "modal") out.bookingPosition = b.bookingPosition;
   if (Array.isArray(b.galleryAltTexts)) out.galleryAltTexts = b.galleryAltTexts.filter((x): x is string => typeof x === "string");
   if (Array.isArray(b.weekendDays)) {
     const arr = (b.weekendDays as unknown[]).filter((x): x is number => typeof x === "number" && x >= 0 && x <= 6);
-    if (arr.length > 0) out.weekendDays = Array.from(new Set(arr)).sort((a, b) => a - b);
+    out.weekendDays = Array.from(new Set(arr)).sort((a, b) => a - b);
   }
   if (typeof b.sortOrder === "number") out.sortOrder = b.sortOrder;
   if (b.pricingType === "ticketed" || b.pricingType === "charter") out.pricingType = b.pricingType;
@@ -300,6 +304,7 @@ function parseBody(
   }
   if (typeof b.allowTipNow === "boolean") out.allowTipNow = b.allowTipNow;
   if (typeof b.allowTipLater === "boolean") out.allowTipLater = b.allowTipLater;
+  if (typeof b.showSpotsRemaining === "boolean") out.showSpotsRemaining = b.showSpotsRemaining;
   if (Object.prototype.hasOwnProperty.call(b, "heroImagePosition")) {
     if (b.heroImagePosition === null || b.heroImagePosition === "") {
       out.heroImagePosition = "";
@@ -739,6 +744,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       if (expFieldsForUpdate[key] === "") {
         expFieldsForUpdate[key] = FieldValue.delete();
       }
+    }
+    if (expFieldsForUpdate.spotsLeftOverride === null) {
+      expFieldsForUpdate.spotsLeftOverride = FieldValue.delete();
     }
 
     // Accumulate all writes into a single batch for one round-trip.

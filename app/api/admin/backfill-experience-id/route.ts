@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
+import { requireDestructiveConfirmPhrase } from "@/lib/admin-destructive-confirm";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { inferSlugFromTitle, getExperienceIdVariants } from "@/lib/booking/experience-aliases";
 import { isCanonicalExperienceId } from "@/lib/booking/experience-id";
@@ -120,11 +121,16 @@ export async function POST(request: NextRequest) {
     cursor?: string;
     applyUpdates?: boolean;
     verifyOnly?: boolean;
+    confirmPhrase?: string;
   };
   const verifyOnly = body.verifyOnly === true;
   const applyUpdates = body.applyUpdates === true && !verifyOnly;
   if (!applyUpdates && !verifyOnly) {
     return NextResponse.json({ error: "set verifyOnly=true to preview or applyUpdates=true to execute updates" }, { status: 400 });
+  }
+  if (applyUpdates) {
+    const confirmDeny = requireDestructiveConfirmPhrase(body.confirmPhrase);
+    if (confirmDeny) return confirmDeny;
   }
   const collection = body.collection ?? "bookings";
   if (collection !== "bookings" && collection !== "holds") {

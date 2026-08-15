@@ -14,7 +14,11 @@ function isAdminCronPath(pathname: string): boolean {
 
 /** Block automation endpoints can use Bearer BLOCK_SECRET without admin cookie. */
 function isBlockSecretPath(pathname: string): boolean {
-  return pathname === "/api/admin/blocks/block-slot" || pathname === "/api/admin/blocks/block-date";
+  return (
+    pathname === "/api/admin/blocks/block-slot" ||
+    pathname === "/api/admin/blocks/block-date" ||
+    pathname === "/api/admin/blocks/unblock-slot"
+  );
 }
 
 async function isCronAuthorized(request: NextRequest): Promise<boolean> {

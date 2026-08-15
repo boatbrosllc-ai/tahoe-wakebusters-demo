@@ -5,6 +5,7 @@ import type { ListingBoat } from "@/lib/booking/types";
 import { normalizePublicSlug } from "@/lib/booking/slug";
 import {
   parseBoatType,
+  parseAllowedStartTimes,
   sanitizePhotoUrls,
   validateBoatTypeAgainstExperiences,
 } from "@/lib/boats/validation";
@@ -32,12 +33,22 @@ function parseBody(body: unknown): (Omit<ListingBoat, "active"> & { active?: boo
   if (!slug) return null;
   const description = typeof b.description === "string" ? b.description.trim() || undefined : undefined;
   const active = typeof b.active === "boolean" ? b.active : true;
-  const parsedBoatType = parseBoatType(b.boatType);
-  if (parsedBoatType === null) return null;
-  const boatType = parsedBoatType ?? undefined;
+  // null/empty = omit boatType; invalid string rejects the body
+  let boatType: string | undefined;
+  if (b.boatType != null && b.boatType !== "") {
+    const parsedBoatType = parseBoatType(b.boatType);
+    if (parsedBoatType === null) return null;
+    boatType = parsedBoatType ?? undefined;
+  }
   const heroSubtitle = typeof b.heroSubtitle === "string" ? b.heroSubtitle.trim() || undefined : undefined;
   const capacity = typeof b.capacity === "number" && b.capacity > 0 ? b.capacity : undefined;
   const color = typeof b.color === "string" ? b.color.trim() || undefined : undefined;
+  const allowedStartTimesParsed = parseAllowedStartTimes(b.allowedStartTimes);
+  if (allowedStartTimesParsed === null) return null;
+  const allowedStartTimes =
+    allowedStartTimesParsed !== undefined && allowedStartTimesParsed.length > 0
+      ? allowedStartTimesParsed
+      : undefined;
   const parsed = {
     name,
     slug,
@@ -50,6 +61,7 @@ function parseBody(body: unknown): (Omit<ListingBoat, "active"> & { active?: boo
     ...(heroSubtitle && { heroSubtitle }),
     ...(capacity !== undefined && { capacity }),
     ...(color && { color }),
+    ...(allowedStartTimes && { allowedStartTimes }),
   };
   return stripUndefined(parsed as Record<string, unknown>) as (Omit<ListingBoat, "active"> & { active?: boolean });
 }

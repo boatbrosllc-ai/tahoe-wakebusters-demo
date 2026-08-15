@@ -63,7 +63,7 @@ export interface ListingBoat {
   allowedStartTimes?: { hour: number; minute: number }[];
   /** Optional custom line under the boat name on the public boat page (e.g. "Lake Austin tritoon rental · Captain included"). */
   heroSubtitle?: string;
-  /** Max guests for display and generated description (e.g. "up to 14 guests"). Defaults to 14 when omitted. */
+  /** Max guests for display and generated description (e.g. "up to 6 guests"). Defaults to 6 when omitted. */
   capacity?: number;
   /** Optional color for admin calendar (hex e.g. "#14b8a6"). When set, calendar uses this for the boat. */
   color?: string;

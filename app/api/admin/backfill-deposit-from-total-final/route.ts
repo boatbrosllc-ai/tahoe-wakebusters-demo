@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
+import { requireDestructiveConfirmPhrase } from "@/lib/admin-destructive-confirm";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { Booking } from "@/lib/booking/types";
 import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
@@ -121,12 +122,18 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
-  const body = (await request.json().catch(() => ({}))) as { applyUpdates?: boolean; cursor?: string | null };
+  const body = (await request.json().catch(() => ({}))) as {
+    applyUpdates?: boolean;
+    cursor?: string | null;
+    confirmPhrase?: string;
+  };
   if (body.applyUpdates !== true) {
     return NextResponse.json(
       { error: "POST requires body { applyUpdates: true, cursor?: string }. Use GET for dry-run." },
       { status: 400 }
     );
   }
+  const confirmDeny = requireDestructiveConfirmPhrase(body.confirmPhrase);
+  if (confirmDeny) return confirmDeny;
   return runBackfill(false, request, body.cursor ?? null);
 }

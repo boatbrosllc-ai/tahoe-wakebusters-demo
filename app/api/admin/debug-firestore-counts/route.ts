@@ -1,7 +1,11 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const unauthorized = await requireAdminSession(request.headers.get("cookie"));
+  if (unauthorized) return unauthorized;
+
   const db = getDb();
 
   async function summarizeCollection(name: string) {
@@ -26,4 +30,3 @@ export async function GET() {
     blocks,
   });
 }
-

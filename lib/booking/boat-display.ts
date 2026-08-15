@@ -8,7 +8,7 @@ export interface BoatDisplayInput {
   name: string;
   description?: string;
   boatType?: string;
-  /** Max guests for generated copy (e.g. "up to 14 guests"). Defaults to 14 when omitted. */
+  /** Max guests for generated copy (e.g. "up to 6 guests"). Defaults to 6 when omitted. */
   capacity?: number;
 }
 

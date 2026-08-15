@@ -7,6 +7,7 @@ import { runExpiredHoldReleaseTransaction } from "@/lib/booking/cleanup-holds-lo
 import { normalizePublicSlug } from "@/lib/booking/slug";
 import {
   parseBoatType,
+  parseAllowedStartTimes,
   sanitizePhotoUrls,
   validateBoatTypeAgainstExperiences,
 } from "@/lib/boats/validation";
@@ -33,9 +34,14 @@ function parseBody(body: unknown): Partial<ListingBoat> | null {
   if (Array.isArray(b.photos)) out.photos = sanitizePhotoUrls(b.photos).photos;
   if (typeof b.active === "boolean") out.active = b.active;
   if (Object.prototype.hasOwnProperty.call(b, "boatType")) {
-    const parsedBoatType = parseBoatType(b.boatType);
-    if (parsedBoatType === null) return null;
-    out.boatType = parsedBoatType ?? undefined;
+    // null clears boatType; invalid strings reject the whole body.
+    if (b.boatType === null) {
+      out.boatType = null;
+    } else {
+      const parsedBoatType = parseBoatType(b.boatType);
+      if (parsedBoatType === null) return null;
+      out.boatType = parsedBoatType ?? undefined;
+    }
   }
   if (Array.isArray(b.experienceIds)) out.experienceIds = b.experienceIds.filter((x): x is string => typeof x === "string");
   if (typeof b.heroSubtitle === "string") out.heroSubtitle = b.heroSubtitle.trim();
@@ -43,6 +49,12 @@ function parseBody(body: unknown): Partial<ListingBoat> | null {
   else if (typeof b.capacity === "number" && b.capacity > 0) out.capacity = b.capacity;
   if (typeof b.color === "string") out.color = b.color.trim() || undefined;
   else if (b.color === null) out.color = null;
+  if (Object.prototype.hasOwnProperty.call(b, "allowedStartTimes")) {
+    const allowed = parseAllowedStartTimes(b.allowedStartTimes);
+    if (allowed === null) return null;
+    // Empty / null → clear on update (FieldValue.delete applied in PATCH handler)
+    out.allowedStartTimes = allowed ?? [];
+  }
   const filtered = stripUndefined(out);
   return Object.keys(filtered).length ? (filtered as Partial<ListingBoat>) : null;
 }
@@ -145,12 +157,16 @@ export async function PATCH(
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     const existingBoatData = existingBoatSnap.data() as ListingBoat;
+    const boatTypeCleared =
+      Object.prototype.hasOwnProperty.call(parsed, "boatType") && (parsed as { boatType?: unknown }).boatType == null;
     const effectiveBoatType =
       typeof parsed.boatType === "string"
         ? parsed.boatType
-        : typeof existingBoatData.boatType === "string"
-          ? existingBoatData.boatType
-          : undefined;
+        : boatTypeCleared
+          ? undefined
+          : typeof existingBoatData.boatType === "string"
+            ? existingBoatData.boatType
+            : undefined;
     const nextExperienceIds = Array.isArray(parsed.experienceIds)
       ? parsed.experienceIds
       : Array.isArray(existingBoatData.experienceIds)
@@ -236,6 +252,13 @@ export async function PATCH(
     }
     if (Object.keys(parsed).length > 0) {
       const updateData = stripUndefined({ ...(parsed as Record<string, unknown>), updatedAt: Date.now() });
+      if (
+        Object.prototype.hasOwnProperty.call(updateData, "allowedStartTimes") &&
+        (!Array.isArray(updateData.allowedStartTimes) ||
+          (updateData.allowedStartTimes as unknown[]).length === 0)
+      ) {
+        updateData.allowedStartTimes = FieldValue.delete();
+      }
       const oldSlugGuardRef = currentSlug ? db.collection("boatUniqueGuards").doc(`slug:${currentSlug}`) : null;
       const newSlugGuardRef = nextSlug ? db.collection("boatUniqueGuards").doc(`slug:${nextSlug}`) : null;
       await db.runTransaction(async (tx) => {
@@ -325,9 +348,15 @@ export async function DELETE(
     const db = getDb();
     const boatRef = db.collection("boats").doc(id);
     const boatSnap = await boatRef.get();
-    if (!boatSnap.exists || (boatSnap.data() as { isListingBoat?: boolean })?.isListingBoat !== true) {
+    if (!boatSnap.exists) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
+    const boatData = boatSnap.data() as { isListingBoat?: boolean; slug?: string };
+    if (boatData?.isListingBoat !== true) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const slugToRelease =
+      typeof boatData.slug === "string" && boatData.slug.trim() ? boatData.slug.trim() : null;
 
     const activeBookingSnap = await db
       .collection("bookings")
@@ -378,6 +407,13 @@ export async function DELETE(
       if (!snap.empty) await batch.commit();
     }
     await boatRef.delete();
+    if (slugToRelease) {
+      try {
+        await db.collection("boatUniqueGuards").doc(`slug:${slugToRelease}`).delete();
+      } catch {
+        /* best-effort: do not fail delete if guard cleanup fails */
+      }
+    }
     return NextResponse.json({ id, deleted: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

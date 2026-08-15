@@ -15,6 +15,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
+import { requireDestructiveConfirmPhrase } from "@/lib/admin-destructive-confirm";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { parseSlotId } from "@/lib/booking/experience-slots";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
@@ -206,6 +207,7 @@ export async function POST(request: NextRequest) {
     cursor?: string;
     runUntilDone?: boolean;
     maxPages?: number;
+    confirmPhrase?: string;
   };
   const verifyOnly = body.verifyOnly === true;
   const applyUpdates = body.applyUpdates === true && !verifyOnly;
@@ -216,6 +218,10 @@ export async function POST(request: NextRequest) {
       { error: "Use POST { verifyOnly: true } for preview or POST { applyUpdates: true } to write updates." },
       { status: 400 }
     );
+  }
+  if (applyUpdates) {
+    const confirmDeny = requireDestructiveConfirmPhrase(body.confirmPhrase);
+    if (confirmDeny) return confirmDeny;
   }
   const response = await runBackfill(!applyUpdates, collection, request, cursor, {
     runUntilDone: applyUpdates && body.runUntilDone === true,

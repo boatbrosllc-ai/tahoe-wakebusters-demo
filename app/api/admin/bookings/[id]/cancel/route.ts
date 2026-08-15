@@ -144,7 +144,8 @@ async function isPastNoRefundCutoff(db: Firestore, booking: Booking): Promise<bo
     const cutoff = new Date(departureStart.getTime() - cutoffHours * 60 * 60 * 1000);
     return new Date() > cutoff;
   } catch {
-    return false;
+    // Fail closed: treat as past no-refund cutoff so refunds require overridePolicy.
+    return true;
   }
 }
 

@@ -1,13 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
+import { normalizePublicSlug } from "@/lib/booking/slug";
 
 function slugFromName(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "-")
-    .replace(/[^a-z0-9-]/g, "");
+  return normalizePublicSlug(name);
 }
 
 async function uniqueBoatSlug(db: ReturnType<typeof getDb>, candidate: string, currentBoatId: string): Promise<string> {
@@ -79,7 +76,9 @@ export async function POST(request: NextRequest) {
       updatedBoats.push({ id: doc.id, slug, name });
     }
     const requiresPreview = updatedBoats.length > 1;
-    if (dryRun || requiresPreview) {
+    // dryRun=true → preview only. dryRun=false (after UI confirm) always commits,
+    // including multi-boat batches.
+    if (dryRun) {
       return NextResponse.json({
         ok: true,
         dryRun: true,

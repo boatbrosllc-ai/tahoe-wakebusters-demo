@@ -111,7 +111,7 @@ export function mapPacketToSiteConfig(packet: CustomerPlatformConfig): SiteConfi
     media: {
       hero: media.hero ?? "/photos/stock/charter/fishing-boat-sunset.jpg",
       welcome: media.welcome ?? media.hero ?? "/photos/stock/charter/yachts-at-dock.jpg",
-      boats: media.boats ?? media.hero ?? "/photos/stock/charter/yacht-sailing-cabo-pexels.jpg",
+      boats: media.boats ?? media.hero ?? "/photos/stock/charter/yachts-at-dock.jpg",
       galleryFallback: media.galleryFallback ?? "/photos/stock/charter/blue-fishing-boat-ocean-pexels.jpg",
       listingFallback: media.listingFallback ?? media.welcome ?? "/photos/stock/charter/yachts-at-dock.jpg",
     },

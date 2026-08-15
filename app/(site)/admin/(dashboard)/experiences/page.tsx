@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Plus, ChevronUp, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { fetchAdminPatchWithForceRetry } from "@/lib/admin-dashboard-patch-with-force";
 
 type ExperienceListItem = {
   id: string;
@@ -55,7 +56,12 @@ export default function AdminExperiencesPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ experienceIdA: item.id, experienceIdB: swapItem.id }),
+        body: JSON.stringify({
+          experienceIdA: item.id,
+          experienceIdB: swapItem.id,
+          sortOrderA: swapItem.sortOrder ?? swapIndex,
+          sortOrderB: item.sortOrder ?? index,
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -78,14 +84,9 @@ export default function AdminExperiencesPage() {
     setTogglingId(item.id);
     setError(null);
     try {
-      const res = await fetch(`/api/admin/experiences/${item.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          active: !item.active,
-          lastKnownUpdatedAt: item.updatedAt,
-        }),
+      const res = await fetchAdminPatchWithForceRetry(`/api/admin/experiences/${item.id}`, {
+        active: !item.active,
+        lastKnownUpdatedAt: item.updatedAt,
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Failed to update listing status");

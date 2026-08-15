@@ -37,7 +37,7 @@ export function isApprovedPhotoUrl(raw: string): boolean {
   if (host === "storage.googleapis.com") {
     return /^\/[^/]+\/.+/.test(path);
   }
-  if (host === "boat-bros-app.appspot.com" || host === "boat-bros-app.firebasestorage.app") {
+  if (host.endsWith(".appspot.com") || host.endsWith(".firebasestorage.app")) {
     return path.length > 1;
   }
   return false;
@@ -65,6 +65,32 @@ export function parseBoatType(raw: unknown): AllowedBoatType | undefined | null 
   return (ALLOWED_BOAT_TYPES as readonly string[]).includes(normalized)
     ? (normalized as AllowedBoatType)
     : null;
+}
+
+export type AllowedStartTime = { hour: number; minute: number };
+
+/**
+ * Parse allowedStartTimes from an API body.
+ * - null or empty array → clear (returns [])
+ * - valid array of {hour:0-23, minute:0|30} → that array
+ * - invalid → null (reject body)
+ * - undefined / missing → undefined (omit)
+ */
+export function parseAllowedStartTimes(raw: unknown): AllowedStartTime[] | undefined | null {
+  if (raw === undefined) return undefined;
+  if (raw === null) return [];
+  if (!Array.isArray(raw)) return null;
+  if (raw.length === 0) return [];
+  const out: AllowedStartTime[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") return null;
+    const hour = (item as { hour?: unknown }).hour;
+    const minute = (item as { minute?: unknown }).minute;
+    if (typeof hour !== "number" || !Number.isInteger(hour) || hour < 0 || hour > 23) return null;
+    if (minute !== 0 && minute !== 30) return null;
+    out.push({ hour, minute });
+  }
+  return out;
 }
 
 export function normalizeBoatPhotoForRender(raw: string | null | undefined): string {

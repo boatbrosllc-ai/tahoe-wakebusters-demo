@@ -25,19 +25,58 @@ import { verifyReceiptToken } from "@/lib/booking/receiptToken";
 
 const TZ = BUSINESS_TIMEZONE;
 
-/** Mazatlan is fixed UTC−7 (no DST). Chicago-style DAYLIGHT/STANDARD pairs must not be used. */
-const VTIMEZONE_LINES: string[] = [
-  "BEGIN:VTIMEZONE",
-  `TZID:${TZ}`,
-  `X-LIC-LOCATION:${TZ}`,
-  "BEGIN:STANDARD",
-  "TZOFFSETFROM:-0700",
-  "TZOFFSETTO:-0700",
-  "TZNAME:MST",
-  "DTSTART:19700101T000000",
-  "END:STANDARD",
-  "END:VTIMEZONE",
-];
+/** Offset minutes east of UTC for `timeZone` at `date` (negative = west). */
+function getOffsetMinutes(timeZone: string, date: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    timeZoneName: "shortOffset",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const raw = parts.find((p) => p.type === "timeZoneName")?.value ?? "GMT";
+  const m = raw.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/i);
+  if (!m) return 0;
+  const sign = m[1] === "-" ? -1 : 1;
+  const hours = Number(m[2]) || 0;
+  const minutes = Number(m[3]) || 0;
+  return sign * (hours * 60 + minutes);
+}
+
+function formatIcalUtcOffset(offsetMinutes: number): string {
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const abs = Math.abs(offsetMinutes);
+  const h = String(Math.floor(abs / 60)).padStart(2, "0");
+  const m = String(abs % 60).padStart(2, "0");
+  return `${sign}${h}${m}`;
+}
+
+/** Simple VTIMEZONE for the customer business zone (offset sampled at feed generation time). */
+function buildVTimezoneLines(timeZone: string, sampleDate = new Date()): string[] {
+  const offset = formatIcalUtcOffset(getOffsetMinutes(timeZone, sampleDate));
+  const short =
+    new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "short" })
+      .formatToParts(sampleDate)
+      .find((p) => p.type === "timeZoneName")?.value ?? "LOCAL";
+  return [
+    "BEGIN:VTIMEZONE",
+    `TZID:${timeZone}`,
+    `X-LIC-LOCATION:${timeZone}`,
+    "BEGIN:STANDARD",
+    `TZOFFSETFROM:${offset}`,
+    `TZOFFSETTO:${offset}`,
+    `TZNAME:${short.replace(/[,:;]/g, "")}`,
+    "DTSTART:19700101T000000",
+    "END:STANDARD",
+    "END:VTIMEZONE",
+  ];
+}
+
+const VTIMEZONE_LINES = buildVTimezoneLines(TZ);
 
 function bookingIncludedInOperatorIcalFeed(status: string | undefined): boolean {
   if (!status) return false;

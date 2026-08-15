@@ -2700,7 +2700,7 @@ export default function CalendarsPage() {
             {editingBlock && (
               <div className="space-y-4">
                 <p className="text-xs text-brand-muted">
-                  Times are America/Mazatlan. Saving updates Firestore and the public booking calendar immediately.
+                  Times are {BUSINESS_TIMEZONE}. Saving updates Firestore and the public booking calendar immediately.
                 </p>
                 <label className="block">
                   <span className="text-xs font-medium text-brand-muted">Start</span>
@@ -2941,7 +2941,7 @@ export default function CalendarsPage() {
                 </p>
                 <p className="mb-3 text-sm text-brand-muted">
                   Pick the boat and the time range — no customer booking needed (personal use, maintenance, etc.). Times
-                  are <span className="font-medium text-brand-dark">America/Mazatlan</span>, same as trip times.
+                  are <span className="font-medium text-brand-dark">{BUSINESS_TIMEZONE}</span>, same as trip times.
                 </p>
                 {uniqueExperienceIds.length === 0 ? (
                   <p className="text-sm text-brand-muted rounded-lg border border-dashed border-brand-dark/15 bg-brand-bg/20 px-3 py-2.5">

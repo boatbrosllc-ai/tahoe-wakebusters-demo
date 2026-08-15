@@ -99,7 +99,7 @@ export const siteConfig: SiteConfig = {
   media: {
     hero: "/photos/stock/charter/fishing-boat-sunset.jpg",
     welcome: "/photos/stock/charter/yachts-at-dock.jpg",
-    boats: "/photos/stock/charter/yacht-sailing-cabo-pexels.jpg",
+    boats: "/photos/stock/charter/yachts-at-dock.jpg",
     galleryFallback: "/photos/stock/charter/blue-fishing-boat-ocean-pexels.jpg",
     listingFallback: "/photos/stock/charter/yachts-at-dock.jpg",
   },

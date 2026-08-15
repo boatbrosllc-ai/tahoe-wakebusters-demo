@@ -191,7 +191,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const [selectedExperience, setSelectedExperience] = useState<ExperienceItem | null>(null);
   const selectedExperienceIdRef = useRef<string | undefined>(undefined);
   selectedExperienceIdRef.current = selectedExperience?.id;
-  /** Package ladder selection (Nasty / Nastier / Nastiest) — drives duration + addon preselect. */
+  /** Package ladder selection — drives duration + addon preselect. */
   const [selectedBundleId, setSelectedBundleId] = useState<BundleId | null>(null);
   const [packageDurationHours, setPackageDurationHours] = useState<number | null>(null);
   const [packageAddonCatalogKeys, setPackageAddonCatalogKeys] = useState<string[] | null>(null);

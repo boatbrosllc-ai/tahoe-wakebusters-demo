@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
+import { requireDestructiveConfirmPhrase } from "@/lib/admin-destructive-confirm";
 import { getDb } from "@/lib/booking/firebase-admin";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import {
@@ -28,7 +29,12 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
-  const body = (await request.json().catch(() => ({}))) as { applyUpdates?: boolean; dryRun?: boolean; verifyOnly?: boolean };
+  const body = (await request.json().catch(() => ({}))) as {
+    applyUpdates?: boolean;
+    dryRun?: boolean;
+    verifyOnly?: boolean;
+    confirmPhrase?: string;
+  };
   const verifyOnly = body.verifyOnly === true || body.dryRun === true;
   const applyUpdates = (body.applyUpdates === true || body.dryRun === false) && !verifyOnly;
   if (!applyUpdates && !verifyOnly) {
@@ -38,6 +44,10 @@ export async function POST(request: NextRequest) {
       },
       { status: 400 }
     );
+  }
+  if (applyUpdates) {
+    const confirmDeny = requireDestructiveConfirmPhrase(body.confirmPhrase);
+    if (confirmDeny) return confirmDeny;
   }
   return runBackfill(!applyUpdates, request);
 }

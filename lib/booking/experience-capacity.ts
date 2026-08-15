@@ -21,7 +21,7 @@ function isWatersportsSlug(slug: string | undefined): boolean {
 /**
  * Returns the effective max guests/tickets for an experience.
  * Ticketed experiences use maxCapacity; charter experiences use experience maxGuests or MAX_GUESTS.
- * Wake/watersports charter is always 14 regardless of stored value.
+ * In fixed-windows mode only, wake/watersports charter is capped at 14 for legacy sportfisher inventory.
  */
 export function getMaxGuestsForExperience(
   experience: {

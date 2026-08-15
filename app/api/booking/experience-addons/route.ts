@@ -29,9 +29,12 @@ export async function GET(request: NextRequest) {
           type: data.type,
           maxQty: data.maxQty,
           highlight: data.highlight ?? false,
+          hiddenFromBookingUI: data.hiddenFromBookingUI === true,
         };
       })
-      .filter((a) => a.type !== "tip"); // Tip is shown as "Tip now" / "Tip later" buttons, not as addon
+      .filter((a) => a.type !== "tip") // Tip is shown as "Tip now" / "Tip later" buttons, not as addon
+      .filter((a) => !a.hiddenFromBookingUI)
+      .map(({ hiddenFromBookingUI: _hidden, ...rest }) => rest);
     return NextResponse.json({ addons });
   } catch (err) {
     console.error("[booking/experience-addons]", err);

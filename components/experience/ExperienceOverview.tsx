@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { motion, useReducedMotion } from "framer-motion";
+import { brand } from "@/content/brand";
 import { EXPERIENCE_OVERVIEW } from "@/lib/experience/lakeAustinPontoon.data";
 import { getDisplayImageUrl } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -62,7 +63,7 @@ export function ExperienceOverview({
             >
               <Image
                 src={imageSrc}
-                alt={imageAlt ?? "Lake Austin pontoon experience"}
+                alt={imageAlt ?? `${brand.companyName} charter experience`}
                 fill
                 className="object-cover"
                 sizes="(max-width: 1024px) 100vw, 50vw"

@@ -262,7 +262,7 @@ export function getBookingConfirmationPreviewHtml(): string {
     createdAt: { toDate: () => new Date() } as any,
   };
   const sampleContext: BookingEmailContext = {
-    boatName: "Sunset Cruise – Lake Austin",
+    boatName: "Private Charter",
     startAt: "Sat, Mar 15, 2025, 2:00 PM",
     endAt: "Sat, Mar 15, 2025, 4:00 PM",
     durationHours: 2,

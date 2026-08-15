@@ -325,6 +325,21 @@ function buildMinimalExperiencePatchBody(data: ExperienceFormData, initial: Expe
 }
 
 function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
+  const spotsOverrideParsed =
+    d.spotsLeftOverride !== "" ? parseInt(d.spotsLeftOverride, 10) : NaN;
+  const spotsLeftOverride =
+    d.spotsLeftOverride === ""
+      ? null
+      : !isNaN(spotsOverrideParsed) && spotsOverrideParsed >= 0
+        ? spotsOverrideParsed
+        : null;
+  const hasSeasonalDates =
+    Boolean(d.seasonalStartDate) &&
+    Boolean(d.seasonalEndDate) &&
+    /^\d{4}-\d{2}-\d{2}$/.test(d.seasonalStartDate) &&
+    /^\d{4}-\d{2}-\d{2}$/.test(d.seasonalEndDate);
+  // Restricted season requires dates; without them do not persist enabled:true + months 1–12.
+  const seasonalEnabled = d.seasonalEnabled && hasSeasonalDates;
   return {
     slug: normalizePublicSlug(d.slug),
     title: d.title,
@@ -343,10 +358,10 @@ function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
     cancellationPolicy: d.cancellationPolicy,
     faqs: d.faqs,
     seasonal: {
-      enabled: d.seasonalEnabled,
+      enabled: seasonalEnabled,
       startMonth: d.seasonalStartMonth,
       endMonth: d.seasonalEndMonth,
-      ...(d.seasonalStartDate && d.seasonalEndDate && /^\d{4}-\d{2}-\d{2}$/.test(d.seasonalStartDate) && /^\d{4}-\d{2}-\d{2}$/.test(d.seasonalEndDate) && { startDate: d.seasonalStartDate, endDate: d.seasonalEndDate }),
+      ...(hasSeasonalDates && { startDate: d.seasonalStartDate, endDate: d.seasonalEndDate }),
     },
     active: d.active,
     timezone: d.timezone || undefined,
@@ -366,21 +381,22 @@ function formDataToBody(d: ExperienceFormData): Record<string, unknown> {
       maxQty: a.maxQty || undefined,
       ...(a.highlight && { highlight: true }),
     })),
-    ...(d.heroOverlayText && { heroOverlayText: d.heroOverlayText }),
-    ...(d.promoVideoUrl && { promoVideoUrl: d.promoVideoUrl }),
-    ...(d.metaTitle && { metaTitle: d.metaTitle }),
-    ...(d.metaDescription && { metaDescription: d.metaDescription }),
-    ...(d.ctaButtonText && { ctaButtonText: d.ctaButtonText }),
-    ...(d.cancellationSummary && { cancellationSummary: d.cancellationSummary }),
-    ...(d.testimonials.length > 0 && { testimonials: d.testimonials.map((t) => ({ name: t.name, quote: t.quote, ...(t.date && { date: t.date }) })) }),
+    // Always include clearable optionals so minimal PATCH can send empty/null to clear.
+    heroOverlayText: d.heroOverlayText,
+    promoVideoUrl: d.promoVideoUrl,
+    metaTitle: d.metaTitle,
+    metaDescription: d.metaDescription,
+    ctaButtonText: d.ctaButtonText,
+    cancellationSummary: d.cancellationSummary,
+    testimonials: d.testimonials.map((t) => ({ name: t.name, quote: t.quote, ...(t.date && { date: t.date }) })),
     featured: d.featured,
-    ...(d.spotsLeftOverride !== "" ? (() => { const n = parseInt(d.spotsLeftOverride, 10); return !isNaN(n) ? { spotsLeftOverride: n } : {}; })() : {}),
+    spotsLeftOverride,
     ...(d.defaultRateId && { defaultRateId: d.defaultRateId }),
     ...(d.bookingPosition !== "sidebar" && { bookingPosition: d.bookingPosition }),
-    ...(d.galleryAltTexts.length > 0 && { galleryAltTexts: d.galleryAltTexts }),
-    ...(d.holidayDates.length > 0 && { holidayDates: d.holidayDates.filter((h) => h.start || h.end) }),
+    galleryAltTexts: d.galleryAltTexts,
+    holidayDates: d.holidayDates.filter((h) => h.start || h.end),
     weekendDays: d.weekendDays.length > 0 ? d.weekendDays : [0, 6],
-    ...(d.friSunDays?.length ? { friSunDays: d.friSunDays } : {}),
+    friSunDays: d.friSunDays ?? [],
     pricingType: d.pricingType,
     ...(d.pricingType === "charter" && { allowDeposit: d.allowDeposit ?? false }),
     allowTipNow: d.allowTipNow !== false,
@@ -549,6 +565,11 @@ export function ExperienceForm({
     }
     if (uploadsActive) {
       setError("Please wait for all photo uploads to finish before saving.");
+      setLoading(false);
+      return;
+    }
+    if (data.seasonalEnabled && (!data.seasonalStartDate || !data.seasonalEndDate)) {
+      setError("Set both From and To dates for a restricted booking window, or switch back to Year-round.");
       setLoading(false);
       return;
     }
@@ -758,7 +779,30 @@ export function ExperienceForm({
           <p className="text-sm text-brand-muted mb-2">Upload or paste URLs. Drag photos to reorder. First image can be used as the listing cover.</p>
           <PhotoUploader
             value={data.gallery}
-            onChange={(urls) => update("gallery", urls)}
+            onChange={(urls) => {
+              setData((prev) => {
+                const oldGallery = prev.gallery;
+                const oldAlts = [...(prev.galleryAltTexts || [])];
+                while (oldAlts.length < oldGallery.length) oldAlts.push("");
+                const used = new Set<number>();
+                const nextAlts = urls.map((url) => {
+                  let idx = -1;
+                  for (let i = 0; i < oldGallery.length; i++) {
+                    if (used.has(i)) continue;
+                    if (oldGallery[i] === url) {
+                      idx = i;
+                      break;
+                    }
+                  }
+                  if (idx >= 0) {
+                    used.add(idx);
+                    return oldAlts[idx] ?? "";
+                  }
+                  return "";
+                });
+                return { ...prev, gallery: urls, galleryAltTexts: nextAlts };
+              });
+            }}
             onUploadStateChange={setGalleryUploadsActive}
             maxPhotos={24}
             listPrefix="experiences/gallery/"
@@ -1068,8 +1112,10 @@ export function ExperienceForm({
         </p>
         <div>
           <label className="block text-sm font-medium text-brand-dark" htmlFor="exp-timezone">Timezone</label>
-          <input id="exp-timezone" className={inputClass} value={data.timezone} onChange={(e) => update("timezone", e.target.value)} placeholder={defaultBusinessTimezone} aria-label="Timezone for times and dates" />
-          <p className="text-xs text-brand-muted mt-1">Used for departure times and calendar dates (business timezone from site config).</p>
+          <input id="exp-timezone" className={inputClass} value={data.timezone} onChange={(e) => update("timezone", e.target.value)} placeholder={defaultBusinessTimezone} aria-label="Timezone for display reference" />
+          <p className="text-xs text-brand-muted mt-1">
+            Booking times use the site business timezone from config ({defaultBusinessTimezone}). This field is stored for display/reference only.
+          </p>
         </div>
         </div>}
       </section>
@@ -1279,7 +1325,7 @@ export function ExperienceForm({
                     const m = data.departureMinute;
                     const h12 = h % 12 === 0 ? 12 : h % 12;
                     const ampm = h >= 12 ? "PM" : "AM";
-                    return `Daily departure at ${h12}:${String(m).padStart(2, "0")} ${ampm} · ${data.timezone || "set timezone above"}`;
+                    return `Daily departure at ${h12}:${String(m).padStart(2, "0")} ${ampm} · ${defaultBusinessTimezone}`;
                   })()}
                 </p>
               </div>
@@ -1287,7 +1333,7 @@ export function ExperienceForm({
             <div className="space-y-2">
               <p className="text-sm font-medium text-sky-900">Operating weekdays</p>
               <p className="text-xs text-sky-800">
-                Uses listing timezone (see above). Leave none selected for <strong>every</strong> day, or pick fixed days (e.g. Wednesday only for a weekly club).
+                Uses the site business timezone from config. Leave none selected for <strong>every</strong> day, or pick fixed days (e.g. Wednesday only for a weekly club).
               </p>
               <div className="flex flex-wrap gap-x-4 gap-y-2">
                 {TICKETED_WEEKDAY_LABELS.map((label, day) => (
@@ -1320,7 +1366,9 @@ export function ExperienceForm({
               />
               <span>
                 <span className="block text-sm font-medium text-sky-800">Show spots remaining on booking calendar</span>
-                <span className="block text-xs text-sky-700 mt-0.5">When enabled, customers see &lsquo;X of 12 spots left&rsquo; on the calendar</span>
+                <span className="block text-xs text-sky-700 mt-0.5">
+                  When enabled, customers see &lsquo;X of {data.maxCapacity > 0 ? data.maxCapacity : "N"} spots left&rsquo; on the calendar
+                </span>
               </span>
             </label>
           </div>

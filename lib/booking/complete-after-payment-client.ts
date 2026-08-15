@@ -25,8 +25,12 @@ function triggerRollbackPendingReconcileHint(body: {
   paymentIntentId: string;
   holdId?: string;
   receiptClaimToken?: string | null;
+  releaseToken?: string | null;
 }): void {
   const token = body.receiptClaimToken?.trim();
+  const releaseToken = body.releaseToken?.trim();
+  // Server requires ownership proof — skip useless unauthenticated calls.
+  if (!token && !releaseToken) return;
   const holdId = body.holdId?.trim();
   void fetch("/api/booking/trigger-reconcile-rollback-pending-holds", {
     method: "POST",
@@ -35,6 +39,7 @@ function triggerRollbackPendingReconcileHint(body: {
       paymentIntentId: body.paymentIntentId,
       ...(holdId ? { holdId } : {}),
       ...(token ? { receipt_claim_token: token } : {}),
+      ...(releaseToken ? { release_token: releaseToken } : {}),
     }),
   }).catch(() => {});
 }

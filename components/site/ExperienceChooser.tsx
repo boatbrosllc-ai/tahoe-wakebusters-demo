@@ -11,13 +11,14 @@ import { Clock, Users, ChevronRight } from "lucide-react";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { experienceCardImageUrl } from "@/lib/booking/experience-card-image";
 import { isWakeSurfClubSlug, isWatersportsSlug, isPontoonSlug, getCanonicalExperiencePath } from "@/lib/booking/experience-aliases";
+import { siteConfig } from "@/config/site";
 
-const FALLBACK_CARD_IMAGE = "/photos/nsf/cabo-40-express.png";
+const FALLBACK_CARD_IMAGE = siteConfig.media.listingFallback;
 
-/** Old Boat Bros / Lake Austin media still in Firestore — never show on NSF cards. */
+/** Legacy operator media still in Firestore — never show on new customer cards. */
 function isLegacyExperienceImage(url: string | null | undefined): boolean {
   if (!url?.trim()) return true;
-  return /boat-bros|firebasestorage\.app\/experi|IMG_\d|DSC0|pontoon-hero|lake.?austin/i.test(url);
+  return /boat-bros|nastysportfishing|firebasestorage\.app\/experi|IMG_\d|DSC0|pontoon-hero|lake.?austin|\/photos\/nsf\//i.test(url);
 }
 
 function resolveCardHeroImage(

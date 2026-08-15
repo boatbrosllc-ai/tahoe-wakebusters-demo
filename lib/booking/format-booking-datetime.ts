@@ -1,6 +1,6 @@
 /**
  * Canonical formatting for booking/slot dates and times.
- * All display uses the Nasty business timezone (Cabo / America/Mazatlan) so what the
+ * All display uses the customer business timezone (`siteConfig.business.timezone`) so what the
  * guest booked is what they see in app, emails, success page, and admin.
  */
 

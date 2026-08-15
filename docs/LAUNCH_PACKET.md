@@ -58,7 +58,7 @@ npm run import:launch-packet -- lib/launch/__fixtures__/sample-launch-packet.jso
 | Boats / trips / rates / add-ons | Firestore | Booking modal, checkout, admin |
 | Waiver | Firestore `waiverTemplates` | Signing wizard, age rules |
 | Fuel / gratuity | Settings doc + add-ons catalog | Gratuity as tip add-on when in packet; fuel label stored for future |
-| Turnaround minutes | Settings doc only | **Not enforced in slot engine yet** |
+| Turnaround minutes | `config/site.ts` + settings doc | Slot conflict buffer via `intervalsConflictWithTurnaround` |
 | Slot selection | `booking.slotSelectionMode` | `hourly` (default) vs legacy `fixed-windows` |
 
 Re-running import **updates** matched Firestore docs from the packet and may overwrite prior admin edits to those fields. Use `--files-only` after go-live if you only need config refresh.

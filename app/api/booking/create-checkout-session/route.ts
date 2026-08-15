@@ -1,4 +1,5 @@
 /**
+ * @deprecated Prefer POST /api/booking/create-payment-intent (Payment Element).
  * Creates a Stripe Checkout Session for a hold (embedded or redirect).
  * Requires `RELEASE_TOKEN_SECRET` (503 if unset). The client must send `release_token` from create-hold (proof of hold possession).
  * Do not log raw `holdId` in client-visible errors or third-party analytics.

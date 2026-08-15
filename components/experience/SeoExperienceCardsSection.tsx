@@ -21,7 +21,7 @@ export interface SeoExperienceCardRich extends SeoExperienceCard {
 
 export function SeoExperienceCardsSection({
   cards,
-  headline = "Our Lake Austin experiences",
+  headline = "Our trips",
 }: {
   cards: SeoExperienceCardRich[];
   headline?: string;

@@ -12,6 +12,7 @@ import type {
   ExperienceSeasonal,
 } from "@/lib/booking/types";
 import { sanitizeCssObjectPosition } from "@/lib/image-position";
+import { sanitizePhotoUrls } from "@/lib/boats/validation";
 
 /** Remove undefined values recursively so Firestore accepts writes when ignoreUndefinedProperties is off. */
 function stripUndefined<T>(obj: T): T {
@@ -43,20 +44,27 @@ function stripUndefined<T>(obj: T): T {
 
 function parseBody(
   body: unknown
-): { slug: string; title: string; subtitle: string; descriptionLong: string; heroMedia: { type: "image" | "video"; url: string }; gallery: string[]; location: ExperienceLocation; maxGuests: number; petsMax: number; included: string[]; whatToBring: string[]; rules: string[]; cancellationPolicy: ExperienceCancellationPolicy; faqs: { q: string; a: string }[]; seasonal: ExperienceSeasonal; active: boolean; timezone?: string; rates?: Omit<ExperienceRate, "active">[]; addons?: Omit<ExperienceAddon, "active">[]; heroOverlayText?: string; promoVideoUrl?: string; metaTitle?: string; metaDescription?: string; ctaButtonText?: string; cancellationSummary?: string; testimonials?: { name: string; quote: string; date?: string }[]; featured?: boolean; spotsLeftOverride?: number; defaultRateId?: string; bookingPosition?: "sidebar" | "inline" | "modal"; galleryAltTexts?: string[]; holidayDates?: { label?: string; start: string; end: string }[]; pricingType?: "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number; tripDurationHours?: number; ticketedWeekdays?: number[]; allowDeposit?: boolean; heroImagePosition?: string; listingCardImagePosition?: string } | null {
+): { slug: string; title: string; subtitle: string; descriptionLong: string; heroMedia: { type: "image" | "video"; url: string }; gallery: string[]; location: ExperienceLocation; maxGuests: number; petsMax: number; included: string[]; whatToBring: string[]; rules: string[]; cancellationPolicy: ExperienceCancellationPolicy; faqs: { q: string; a: string }[]; seasonal: ExperienceSeasonal; active: boolean; timezone?: string; rates?: Omit<ExperienceRate, "active">[]; addons?: Omit<ExperienceAddon, "active">[]; heroOverlayText?: string; promoVideoUrl?: string; metaTitle?: string; metaDescription?: string; ctaButtonText?: string; cancellationSummary?: string; testimonials?: { name: string; quote: string; date?: string }[]; featured?: boolean; spotsLeftOverride?: number; defaultRateId?: string; bookingPosition?: "sidebar" | "inline" | "modal"; galleryAltTexts?: string[]; holidayDates?: { label?: string; start: string; end: string }[]; weekendDays?: number[]; friSunDays?: number[]; showSpotsRemaining?: boolean; allowTipNow?: boolean; allowTipLater?: boolean; sortOrder?: number; pricingType?: "ticketed"; maxCapacity?: number; departureHour?: number; departureMinute?: number; tripDurationHours?: number; ticketedWeekdays?: number[]; allowDeposit?: boolean; heroImagePosition?: string; listingCardImagePosition?: string } | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
   const slug = typeof b.slug === "string" ? normalizePublicSlug(b.slug) : "";
   if (!slug) return null;
   if (!isCanonicalSlug(slug)) return null;
   const title = typeof b.title === "string" ? b.title.trim() : "";
+  if (!title) return null;
   const subtitle = typeof b.subtitle === "string" ? b.subtitle.trim() : "";
   const descriptionLong = typeof b.descriptionLong === "string" ? b.descriptionLong.trim() : "";
-  const heroMedia =
+  const heroMediaRaw =
     b.heroMedia && typeof b.heroMedia === "object" && "url" in b.heroMedia && typeof (b.heroMedia as { url: unknown }).url === "string"
       ? { type: (b.heroMedia as { type?: string }).type === "video" ? "video" as const : "image" as const, url: (b.heroMedia as { url: string }).url }
       : { type: "image" as const, url: "" };
-  const gallery = Array.isArray(b.gallery) ? b.gallery.filter((x): x is string => typeof x === "string") : [];
+  const heroUrlSanitized =
+    heroMediaRaw.url.trim() === ""
+      ? ""
+      : sanitizePhotoUrls([heroMediaRaw.url]).photos[0] ?? "";
+  const heroMedia = { type: heroMediaRaw.type, url: heroUrlSanitized };
+  const galleryRaw = Array.isArray(b.gallery) ? b.gallery.filter((x): x is string => typeof x === "string") : [];
+  const { photos: gallery } = sanitizePhotoUrls(galleryRaw);
   const loc = b.location && typeof b.location === "object" ? (b.location as Record<string, unknown>) : {};
   const location: ExperienceLocation = {
     title: typeof loc.title === "string" ? loc.title.trim() : "",
@@ -82,12 +90,17 @@ function parseBody(
         .map((x) => ({ q: typeof x.q === "string" ? x.q : "", a: typeof x.a === "string" ? x.a : "" }))
     : [];
   const sea = b.seasonal && typeof b.seasonal === "object" ? (b.seasonal as Record<string, unknown>) : {};
+  const seasonalStartDate =
+    typeof sea.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(sea.startDate) ? sea.startDate : undefined;
+  const seasonalEndDate =
+    typeof sea.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(sea.endDate) ? sea.endDate : undefined;
+  const seasonalEnabled = sea.enabled === true && Boolean(seasonalStartDate && seasonalEndDate);
   const seasonal: ExperienceSeasonal = {
-    enabled: sea.enabled === true,
+    enabled: seasonalEnabled,
     startMonth: typeof sea.startMonth === "number" ? sea.startMonth : undefined,
     endMonth: typeof sea.endMonth === "number" ? sea.endMonth : undefined,
-    startDate: typeof sea.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(sea.startDate) ? sea.startDate : undefined,
-    endDate: typeof sea.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(sea.endDate) ? sea.endDate : undefined,
+    startDate: seasonalStartDate,
+    endDate: seasonalEndDate,
   };
   const active = b.active === undefined ? true : b.active === true;
   const timezone = typeof b.timezone === "string" ? b.timezone.trim() || undefined : undefined;
@@ -99,6 +112,7 @@ function parseBody(
           displayName: typeof x.displayName === "string" ? x.displayName : "",
           priceCents: typeof x.priceCents === "number" ? x.priceCents : 0,
           priceWeekendCents: typeof x.priceWeekendCents === "number" ? x.priceWeekendCents : undefined,
+          priceFriSunCents: typeof x.priceFriSunCents === "number" ? x.priceFriSunCents : undefined,
           priceHolidayCents: typeof x.priceHolidayCents === "number" ? x.priceHolidayCents : undefined,
         }))
     : undefined;
@@ -126,6 +140,24 @@ function parseBody(
             ...(priceCentsByDuration && { priceCentsByDuration }),
           };
         })
+    : undefined;
+  const weekendDays = Array.isArray(b.weekendDays)
+    ? Array.from(
+        new Set(
+          (b.weekendDays as unknown[]).filter(
+            (x): x is number => typeof x === "number" && x >= 0 && x <= 6
+          )
+        )
+      ).sort((a, c) => a - c)
+    : undefined;
+  const friSunDays = Array.isArray(b.friSunDays)
+    ? Array.from(
+        new Set(
+          (b.friSunDays as unknown[]).filter(
+            (x): x is number => typeof x === "number" && x >= 0 && x <= 6
+          )
+        )
+      ).sort((a, c) => a - c)
     : undefined;
   const addons = Array.isArray(b.addons)
     ? b.addons
@@ -170,6 +202,11 @@ function parseBody(
       ? ticketedWeekdaysForFirestore(normalizeTicketedWeekdaysInput(b.ticketedWeekdays))
       : undefined;
   const allowDeposit = b.pricingType !== "ticketed" && b.allowDeposit === true ? true : false;
+  const showSpotsRemaining = b.pricingType === "ticketed" && b.showSpotsRemaining === true ? true : undefined;
+  const allowTipNow = typeof b.allowTipNow === "boolean" ? b.allowTipNow : undefined;
+  const allowTipLater = typeof b.allowTipLater === "boolean" ? b.allowTipLater : undefined;
+  const sortOrder =
+    typeof b.sortOrder === "number" && Number.isFinite(b.sortOrder) ? Math.floor(b.sortOrder) : undefined;
   const heroImagePosition = sanitizeCssObjectPosition(b.heroImagePosition);
   const listingCardImagePosition = sanitizeCssObjectPosition(b.listingCardImagePosition);
   return {
@@ -205,6 +242,12 @@ function parseBody(
     bookingPosition,
     galleryAltTexts,
     holidayDates,
+    weekendDays,
+    friSunDays,
+    showSpotsRemaining,
+    allowTipNow,
+    allowTipLater,
+    sortOrder,
     pricingType,
     maxCapacity,
     departureHour,
@@ -286,7 +329,7 @@ export async function POST(request: NextRequest) {
   }
   const parsed = parseBody(body);
   if (!parsed) {
-    return NextResponse.json({ error: "Invalid body: slug required" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid body: slug and title required" }, { status: 400 });
   }
 
   try {
@@ -299,7 +342,7 @@ export async function POST(request: NextRequest) {
       const activeRates = (parsed.rates ?? []).filter((r) => r.priceCents > 0);
       if (activeRates.length === 0) {
         return NextResponse.json(
-          { error: "Active listings require at least one active rate with a positive price." },
+          { error: "Active listings require at least one active rate with a positive price. Uncheck Active to save as a draft." },
           { status: 409 }
         );
       }
@@ -339,6 +382,16 @@ export async function POST(request: NextRequest) {
     if (parsed.addons && parsed.addons.some((a) => !a.name.trim())) {
       return NextResponse.json({ error: "Each initial addon must include a name." }, { status: 400 });
     }
+    let nextSortOrder = parsed.sortOrder;
+    if (nextSortOrder == null) {
+      const sortSnap = await db.collection("experiences").select("sortOrder").get();
+      let maxOrder = -1;
+      for (const d of sortSnap.docs) {
+        const o = d.data().sortOrder;
+        if (typeof o === "number" && Number.isFinite(o) && o > maxOrder) maxOrder = o;
+      }
+      nextSortOrder = maxOrder + 1;
+    }
     const exp: Omit<Experience, "id"> & { updatedAt: number } = {
       slug: parsed.slug,
       title: parsed.title,
@@ -357,6 +410,7 @@ export async function POST(request: NextRequest) {
       seasonal: parsed.seasonal,
       active: parsed.active,
       timezone: parsed.timezone,
+      sortOrder: nextSortOrder,
       ...(parsed.heroOverlayText != null && { heroOverlayText: parsed.heroOverlayText }),
       ...(parsed.promoVideoUrl != null && { promoVideoUrl: parsed.promoVideoUrl }),
       ...(parsed.metaTitle != null && { metaTitle: parsed.metaTitle }),
@@ -370,6 +424,11 @@ export async function POST(request: NextRequest) {
       ...(parsed.bookingPosition != null && { bookingPosition: parsed.bookingPosition }),
       ...(parsed.galleryAltTexts != null && parsed.galleryAltTexts.length > 0 && { galleryAltTexts: parsed.galleryAltTexts }),
       ...(parsed.holidayDates != null && parsed.holidayDates.length > 0 && { holidayDates: parsed.holidayDates }),
+      ...(parsed.weekendDays != null && parsed.weekendDays.length > 0 && { weekendDays: parsed.weekendDays }),
+      ...(parsed.friSunDays != null && parsed.friSunDays.length > 0 && { friSunDays: parsed.friSunDays }),
+      ...(parsed.showSpotsRemaining === true && { showSpotsRemaining: true }),
+      ...(parsed.allowTipNow === false && { allowTipNow: false }),
+      ...(parsed.allowTipLater === false && { allowTipLater: false }),
       ...(parsed.pricingType != null && { pricingType: parsed.pricingType }),
       ...(parsed.allowDeposit === true && { allowDeposit: true }),
       ...(parsed.maxCapacity != null && { maxCapacity: parsed.maxCapacity }),

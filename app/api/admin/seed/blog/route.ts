@@ -8,6 +8,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
+import { requireSeedConfirmPhrase } from "@/lib/admin-destructive-confirm";
 import { getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getBlogPostsRef, writeAuditLog } from "@/lib/blog/firestore";
 import { CMS_BLOG_POST_SEEDS } from "@/lib/blog/cms-posts";
@@ -27,7 +28,6 @@ export async function POST(request: NextRequest) {
   if (deny) return deny;
 
   const seedEnabled = process.env.ENABLE_SEED_ENDPOINT === "true";
-  const isProduction = process.env.NODE_ENV === "production";
   if (!seedEnabled) {
     return NextResponse.json(
       { error: "Seed endpoints are disabled. Set ENABLE_SEED_ENDPOINT=true to enable." },
@@ -42,18 +42,8 @@ export async function POST(request: NextRequest) {
     body = {};
   }
 
-  if (isProduction) {
-    const requiredPhrase = process.env.SEED_CONFIRM_PHRASE?.trim();
-    if (!requiredPhrase || body.confirmPhrase !== requiredPhrase) {
-      return NextResponse.json(
-        {
-          error:
-            "Seed endpoint is production-guarded. Provide body.confirmPhrase matching SEED_CONFIRM_PHRASE to proceed.",
-        },
-        { status: 403 }
-      );
-    }
-  }
+  const confirmDeny = requireSeedConfirmPhrase(body.confirmPhrase);
+  if (confirmDeny) return confirmDeny;
 
   const overwrite = body.overwrite === true;
   const { Timestamp } = getFirestoreExports();

@@ -48,13 +48,13 @@ export function SeoGuideLayout({
 }: Props) {
   const crumbs = [
     { name: "Home", href: "/" },
-    { name: "Guides", href: "/cabo-san-lucas-fishing-charters" },
+    { name: "Guides", href: "/experiences" },
     { name: breadcrumbName, href: path },
   ];
   const schemas = [
     breadcrumbJsonLd([
       { name: "Home", path: "/" },
-      { name: "Guides", path: "/cabo-san-lucas-fishing-charters" },
+      { name: "Guides", path: "/experiences" },
       { name: breadcrumbName, path },
     ]),
     articleJsonLd({
@@ -218,7 +218,7 @@ export function SeoGuideLayout({
               View all charters
             </Link>
             {" · "}
-            <Link href="/cabo-fishing-charter-prices" className="font-semibold text-brand-primary hover:underline">
+            <Link href="/packages" className="font-semibold text-brand-primary hover:underline">
               Pricing details
             </Link>
           </p>
