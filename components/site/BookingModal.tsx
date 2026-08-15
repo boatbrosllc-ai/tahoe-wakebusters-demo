@@ -36,6 +36,7 @@ import { slugMatches, isTicketedExperienceForBooking, isWatersportsSlug } from "
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
 import * as bookingCache from "@/lib/booking/booking-data-cache";
 import { isAddonHiddenFromBookingUI } from "@/lib/booking/hidden-addons";
+import { DEFAULT_MAX_GUESTS } from "@/lib/booking/experience-capacity";
 import type { CachedRateOption } from "@/lib/booking/booking-data-cache";
 import { siteConfig } from "@/config/site";
 import { bookingError } from "@/lib/booking/debug";
@@ -428,7 +429,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
   const ticketMax = useMemo(() => {
     if (isTicketed) return selectedExperience?.maxCapacity ?? selectedExperience?.maxGuests ?? 36;
     if (selectedBoat?.maxGuests != null && selectedBoat.maxGuests > 0) return selectedBoat.maxGuests;
-    return selectedExperience?.maxGuests ?? 14;
+    return selectedExperience?.maxGuests ?? DEFAULT_MAX_GUESTS;
   }, [
     isTicketed,
     selectedBoat?.id,
@@ -1790,7 +1791,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       id: summary.experience.id,
                       slug: summary.experience.slug ?? "",
                       title: summary.experience.title ?? "Experience",
-                      maxGuests: summary.experience.maxGuests ?? 14,
+                      maxGuests: summary.experience.maxGuests ?? DEFAULT_MAX_GUESTS,
                       maxCapacity: summary.experience.maxCapacity ?? undefined,
                       pricingType: summary.experience.pricingType,
                       departureHour: summary.experience.departureHour ?? undefined,
@@ -1972,7 +1973,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       title: detailRecover.title ?? "Experience",
                       subtitle: "",
                       heroMedia: { type: "image", url: "" },
-                      maxGuests: detailRecover.maxGuests ?? 14,
+                      maxGuests: detailRecover.maxGuests ?? DEFAULT_MAX_GUESTS,
                       petsMax: 0,
                       fromPriceCents: fromPriceRec,
                       active: true,
@@ -1991,7 +1992,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       id: parsed.experienceId,
                       slug: parsed.experienceSlug ?? "",
                       title: "Experience",
-                      maxGuests: 14,
+                      maxGuests: DEFAULT_MAX_GUESTS,
                     } as ExperienceItem);
                   }
                   setSelectedDate(parsed.selectedDate ?? null);
@@ -2141,7 +2142,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     title: detailNr.title ?? "Experience",
                     subtitle: "",
                     heroMedia: { type: "image", url: "" },
-                    maxGuests: detailNr.maxGuests ?? 14,
+                    maxGuests: detailNr.maxGuests ?? DEFAULT_MAX_GUESTS,
                     petsMax: 0,
                     fromPriceCents: fromPriceNr,
                     active: true,
@@ -2160,7 +2161,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                     id: parsed.experienceId,
                     slug: parsed.experienceSlug ?? "",
                     title: "Experience",
-                    maxGuests: 14,
+                    maxGuests: DEFAULT_MAX_GUESTS,
                   } as ExperienceItem);
                 }
                 setSelectedDate(parsed.selectedDate ?? null);

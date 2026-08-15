@@ -75,6 +75,16 @@ function parseBody(body: unknown): { holdId: string; embedded?: boolean; release
 }
 
 export async function POST(request: NextRequest) {
+  if (process.env.ENABLE_LEGACY_CHECKOUT_SESSION !== "true") {
+    return NextResponse.json(
+      {
+        error:
+          "Checkout Session path is disabled. Use Payment Element via /api/booking/create-payment-intent. Set ENABLE_LEGACY_CHECKOUT_SESSION=true only for emergency legacy clients.",
+        code: "checkout_session_disabled",
+      },
+      { status: 410 }
+    );
+  }
   try {
     const rl = await checkRateLimit(getClientKey(request));
     if (!rl.allowed) {

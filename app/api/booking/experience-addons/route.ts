@@ -4,6 +4,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { ExperienceAddon } from "@/lib/booking/types";
+import { isAddonHiddenFromBookingUI } from "@/lib/booking/hidden-addons";
 
 export async function GET(request: NextRequest) {
   const experienceId = request.nextUrl.searchParams.get("experienceId");
@@ -29,12 +30,13 @@ export async function GET(request: NextRequest) {
           type: data.type,
           maxQty: data.maxQty,
           highlight: data.highlight ?? false,
+          catalogKey: data.catalogKey,
           hiddenFromBookingUI: data.hiddenFromBookingUI === true,
         };
       })
-      .filter((a) => a.type !== "tip") // Tip is shown as "Tip now" / "Tip later" buttons, not as addon
-      .filter((a) => !a.hiddenFromBookingUI)
-      .map(({ hiddenFromBookingUI: _hidden, ...rest }) => rest);
+      .filter((a) => a.type !== "tip")
+      .filter((a) => !isAddonHiddenFromBookingUI(a))
+      .map(({ hiddenFromBookingUI: _h, catalogKey: _c, ...rest }) => rest);
     return NextResponse.json({ addons });
   } catch (err) {
     console.error("[booking/experience-addons]", err);

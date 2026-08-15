@@ -21,6 +21,7 @@ import { isCanonicalSlug, normalizePublicSlug } from "@/lib/booking/slug";
 import { buildExperienceDocUpdate } from "@/lib/booking/experience-doc-update";
 import { normalizeTicketedWeekdaysInput, ticketedWeekdaysForFirestore } from "@/lib/booking/ticketed-slot-utils";
 import { sanitizeCssObjectPosition } from "@/lib/image-position";
+import { sanitizePhotoUrls } from "@/lib/boats/validation";
 import { getChicagoToday } from "@/lib/booking/booking-date-range";
 
 /** Remove undefined from object (and array elements) so Firestore update/set accepts it. Leaves null and other values. */
@@ -162,12 +163,19 @@ function parseBody(
   if (typeof b.subtitle === "string") out.subtitle = b.subtitle.trim();
   if (typeof b.descriptionLong === "string") out.descriptionLong = b.descriptionLong.trim();
   if (b.heroMedia && typeof b.heroMedia === "object" && "url" in b.heroMedia && typeof (b.heroMedia as { url: unknown }).url === "string") {
+    const rawUrl = (b.heroMedia as { url: string }).url;
+    const sanitizedUrl =
+      rawUrl.trim() === "" ? "" : sanitizePhotoUrls([rawUrl]).photos[0] ?? "";
     out.heroMedia = {
       type: (b.heroMedia as { type?: string }).type === "video" ? "video" : "image",
-      url: (b.heroMedia as { url: string }).url,
+      url: sanitizedUrl,
     };
   }
-  if (Array.isArray(b.gallery)) out.gallery = b.gallery.filter((x): x is string => typeof x === "string");
+  if (Array.isArray(b.gallery)) {
+    out.gallery = sanitizePhotoUrls(
+      b.gallery.filter((x): x is string => typeof x === "string")
+    ).photos;
+  }
   if (b.location && typeof b.location === "object") {
     const loc = b.location as Record<string, unknown>;
     out.location = {

@@ -16,7 +16,10 @@ function cookieHeaderFromStore(): string {
   return c.getAll().map(({ name, value }) => `${name}=${value}`).join("; ");
 }
 
-export async function runSeedAction(setupKey?: string | null): Promise<SeedResult> {
+export async function runSeedAction(
+  setupKey?: string | null,
+  confirmPhrase?: string | null
+): Promise<SeedResult> {
   const openDev =
     process.env.SEED_OPEN_DEV === "1" &&
     process.env.NODE_ENV === "development" &&
@@ -34,6 +37,14 @@ export async function runSeedAction(setupKey?: string | null): Promise<SeedResul
     }
     if (setupKey !== seedSecret) {
       return { ok: false, error: "Invalid or missing setup key. Use the SEED_SECRET value from your environment." };
+    }
+    const requiredPhrase = process.env.SEED_CONFIRM_PHRASE?.trim();
+    if (!requiredPhrase || (confirmPhrase ?? "").trim() !== requiredPhrase) {
+      return {
+        ok: false,
+        error:
+          "Confirm phrase required. Set SEED_CONFIRM_PHRASE in the environment and enter the same value here.",
+      };
     }
     const cookieHeader = cookieHeaderFromStore();
     const sessionOk = await verifyAdminSessionCookie(cookieHeader);

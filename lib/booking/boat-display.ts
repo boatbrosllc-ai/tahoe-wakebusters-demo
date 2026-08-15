@@ -1,3 +1,4 @@
+import { DEFAULT_MAX_GUESTS } from "@/lib/booking/experience-capacity";
 import { brand } from "@/content/brand";
 /**
  * Ensures boat descriptions shown on the site always match the boat's name
@@ -31,12 +32,10 @@ function descriptionMatchesBoat(boatName: string, description: string): boolean 
   return words.some((word) => firstChunk.includes(word));
 }
 
-const DEFAULT_CAPACITY = 6;
-
 /** Type-specific first-line copy that uses the boat name (never another brand). */
 function generatedDescription(boat: BoatDisplayInput): string {
   const displayName = getDisplayName(boat.name);
-  const guests = boat.capacity ?? DEFAULT_CAPACITY;
+  const guests = boat.capacity ?? DEFAULT_MAX_GUESTS;
   const t = (boat.boatType ?? "").trim().toLowerCase();
   if (t === "wake") {
     return `${displayName} — private charter boat for up to ${guests} guests with captain and crew included.`;

@@ -28,6 +28,7 @@ export default function AdminBackfillToolsPage() {
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<BoatBackfillPreview | null>(null);
   const [applyConfirmOpen, setApplyConfirmOpen] = useState(false);
+  const [confirmPhrase, setConfirmPhrase] = useState("");
 
   const runPreview = useCallback(async () => {
     setError(null);
@@ -53,18 +54,19 @@ export default function AdminBackfillToolsPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ applyUpdates: true }),
+        body: JSON.stringify({ applyUpdates: true, confirmPhrase: confirmPhrase.trim() }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throwIfAdminApiError(res, data, "Apply failed");
       setPreview(data as BoatBackfillPreview);
       setApplyConfirmOpen(false);
+      setConfirmPhrase("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Request failed");
     } finally {
       setApplyLoading(false);
     }
-  }, []);
+  }, [confirmPhrase]);
 
   const updatedCount =
     preview?.results?.filter((r) => r.outcome === "updated").length ?? 0;
@@ -111,11 +113,30 @@ export default function AdminBackfillToolsPage() {
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 space-y-3">
             <p className="font-medium">Apply boatId backfill to Firestore?</p>
             <p>This updates booking documents. Ensure you reviewed the preview outcomes.</p>
+            <div>
+              <label htmlFor="backfill-confirm-phrase" className="block text-xs font-medium">
+                Confirm phrase (BACKFILL_CONFIRM_PHRASE or SEED_CONFIRM_PHRASE)
+              </label>
+              <input
+                id="backfill-confirm-phrase"
+                type="password"
+                value={confirmPhrase}
+                onChange={(e) => setConfirmPhrase(e.target.value)}
+                className="mt-1 block w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm"
+                autoComplete="off"
+              />
+            </div>
             <div className="flex gap-2">
               <Button type="button" variant="outline" size="sm" onClick={() => setApplyConfirmOpen(false)}>
                 Cancel
               </Button>
-              <Button type="button" size="sm" className="bg-red-600 hover:bg-red-700" disabled={applyLoading} onClick={() => void runApply()}>
+              <Button
+                type="button"
+                size="sm"
+                className="bg-red-600 hover:bg-red-700"
+                disabled={applyLoading || !confirmPhrase.trim()}
+                onClick={() => void runApply()}
+              >
                 {applyLoading ? "Applying…" : "Yes, apply updates"}
               </Button>
             </div>

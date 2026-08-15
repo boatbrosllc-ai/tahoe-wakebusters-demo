@@ -15,6 +15,7 @@ export function AdminSeedForm({ seedSecretConfigured, allowOpenDevBypass }: Prop
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [setupKey, setSetupKey] = useState("");
+  const [confirmPhrase, setConfirmPhrase] = useState("");
   const [destructiveConfirm, setDestructiveConfirm] = useState(false);
 
   const requiresSetupKey = seedSecretConfigured;
@@ -25,7 +26,7 @@ export function AdminSeedForm({ seedSecretConfigured, allowOpenDevBypass }: Prop
     setLoading(true);
     setResult(null);
     try {
-      const res = await runSeedAction(setupKey.trim() || undefined);
+      const res = await runSeedAction(setupKey.trim() || undefined, confirmPhrase.trim() || undefined);
       if (res.ok) {
         setResult({
           ok: true,
@@ -46,7 +47,7 @@ export function AdminSeedForm({ seedSecretConfigured, allowOpenDevBypass }: Prop
       {(requiresSetupKey || !allowOpenDevBypass) && (
         <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           Seeding can overwrite live operational data. When <code className="bg-amber-100/80 px-1 rounded text-xs">SEED_SECRET</code> is set
-          on the server, the setup key and a signed-in admin session are required (plus a 24-hour per-admin rate limit).
+          on the server, the setup key, confirm phrase, and a signed-in admin session are required (plus a 24-hour per-admin rate limit).
         </div>
       )}
       {showDevBypassBanner && (
@@ -78,6 +79,22 @@ export function AdminSeedForm({ seedSecretConfigured, allowOpenDevBypass }: Prop
         </div>
       )}
       {requiresSetupKey && (
+        <div>
+          <label htmlFor="confirm-phrase" className="block text-sm font-medium text-brand-dark">
+            Confirm phrase (required)
+          </label>
+          <input
+            id="confirm-phrase"
+            type="password"
+            value={confirmPhrase}
+            onChange={(e) => setConfirmPhrase(e.target.value)}
+            className="mt-1 block w-full rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+            placeholder="Same as SEED_CONFIRM_PHRASE in .env"
+            autoComplete="off"
+          />
+        </div>
+      )}
+      {requiresSetupKey && (
         <label className="flex items-start gap-2 text-sm text-brand-dark">
           <input
             type="checkbox"
@@ -92,7 +109,10 @@ export function AdminSeedForm({ seedSecretConfigured, allowOpenDevBypass }: Prop
         type="submit"
         size="lg"
         className="w-full rounded-xl"
-        disabled={loading || (requiresSetupKey && (!destructiveConfirm || !setupKey.trim()))}
+        disabled={
+          loading ||
+          (requiresSetupKey && (!destructiveConfirm || !setupKey.trim() || !confirmPhrase.trim()))
+        }
       >
         {loading ? "Setting up…" : "Run setup"}
       </Button>

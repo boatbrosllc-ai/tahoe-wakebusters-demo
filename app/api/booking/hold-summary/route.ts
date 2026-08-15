@@ -5,6 +5,7 @@ import { checkRateLimitPublicRead, getClientKey } from "@/lib/booking/rate-limit
 import { verifyReleaseToken } from "@/lib/booking/releaseToken";
 import { verifyReceiptClaimToken } from "@/lib/booking/receiptToken";
 import { verifyAdminSessionCookie } from "@/lib/admin-auth-firebase";
+import { DEFAULT_MAX_GUESTS } from "@/lib/booking/experience-capacity";
 
 export async function POST(request: NextRequest) {
   try {
@@ -99,7 +100,7 @@ export async function POST(request: NextRequest) {
             slug: exp.slug ?? "",
             title: exp.title ?? "",
             pricingType: exp.pricingType ?? "charter",
-            maxGuests: exp.maxGuests ?? 14,
+            maxGuests: exp.maxGuests ?? DEFAULT_MAX_GUESTS,
             maxCapacity: exp.maxCapacity ?? null,
             departureHour: exp.departureHour ?? null,
             departureMinute: exp.departureMinute ?? null,

@@ -15,6 +15,7 @@ import { validateAndApplyDiscount } from "@/lib/booking/discount";
 import { checkRateLimitSensitiveMutation, getClientKey } from "@/lib/booking/rate-limit";
 import { validateSlotSchedule } from "@/lib/booking/booking-schedule-rules";
 import { getMaxGuestsForExperience } from "@/lib/booking/experience-capacity";
+import { isAddonHiddenFromBookingUI } from "@/lib/booking/hidden-addons";
 import { getExperienceIdVariants, boatMatchesExperience, inferSlugFromTitle, isWatersportsSlug } from "@/lib/booking/experience-aliases";
 import {
   getTicketedDepartureAndDuration,
@@ -684,6 +685,12 @@ export async function POST(request: NextRequest) {
     for (const s of input.addonSelections) {
       const addon = addonsById.get(s.addonId);
       if (!addon) continue;
+      if (isAddonHiddenFromBookingUI(addon)) {
+        return NextResponse.json(
+          { error: "One or more selected add-ons are not available for booking.", hint: `addonId: ${s.addonId}` },
+          { status: 400 }
+        );
+      }
       const maxQty = "maxQty" in addon && typeof (addon as { maxQty?: number }).maxQty === "number" ? (addon as { maxQty: number }).maxQty : undefined;
       if (maxQty != null && s.qty > maxQty) {
         return NextResponse.json(
