@@ -3,6 +3,7 @@ import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { getStorageBucket } from "@/lib/booking/firebase-admin";
 import { appendWaiverSignedStoragePaths, getRequestById } from "@/lib/waiver/firestore";
 import { generateWaiverPdf } from "@/lib/waiver/pdf";
+import { requireFeatureResponse } from "@/lib/plan";
 
 /**
  * Generate PDF from stored signed waiver HTML (e.g. after configuring PDFSHIFT_API_KEY,
@@ -10,8 +11,15 @@ import { generateWaiverPdf } from "@/lib/waiver/pdf";
  */
 export async function POST(
   _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  {
+  params }: { params: Promise<{ id: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(_request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

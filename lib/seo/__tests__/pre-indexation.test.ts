@@ -64,26 +64,28 @@ describe("pre-indexation SEO safety", () => {
     assert.equal(isPlaceholderPhone(""), true);
   });
 
-  it("omits telephone and streetAddress from LocalBusiness when unverified", () => {
-    assert.equal(getPublicPhone(), null);
+  it("includes verified telephone and streetAddress in LocalBusiness for this customer", () => {
+    const phone = getPublicPhone();
+    assert.ok(phone);
+    assert.equal(phone.display, brand.phone);
     const jsonLd = buildLocalBusinessJsonLd({
       baseUrl: "https://example.com",
       description: "Boat rental charters",
     });
     assert.equal(jsonLd["@type"], "LocalBusiness");
     assert.equal(jsonLd.name, brand.companyName);
-    assert.equal(jsonLd.telephone, undefined);
+    assert.equal(jsonLd.telephone, phone.tel);
     assert.equal(jsonLd.openingHoursSpecification, undefined);
     assert.equal(jsonLd.sameAs, undefined);
     const address = jsonLd.address as Record<string, unknown>;
-    assert.equal(address.streetAddress, undefined);
-    assert.equal(address.postalCode, undefined);
+    assert.equal(address.streetAddress, brand.address.line1);
+    assert.equal(address.postalCode, brand.address.zip);
     assert.equal(address.addressLocality, brand.address.city);
     assert.equal(address.addressRegion, brand.address.state);
     assert.equal(address.addressCountry, brand.country);
     assert.equal(jsonLd.url, "https://example.com");
     const catalog = jsonLd.hasOfferCatalog as { itemListElement: unknown[] };
-    assert.equal(catalog.itemListElement.length, 2);
+    assert.equal(catalog.itemListElement.length, 3);
   });
 
   it("strips trailing slash from schema URL", () => {

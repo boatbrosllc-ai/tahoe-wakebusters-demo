@@ -3,6 +3,7 @@
  */
 
 import { getSiteBaseUrl, siteConfig } from "@/config/site";
+import { testimonials } from "@/content/testimonials";
 
 const { company, contact } = siteConfig;
 
@@ -33,9 +34,9 @@ export const location = {
   geo: contact.geo,
   /** Service area for content */
   areaServed: [...contact.areaServed],
-  /** No public review aggregate until real reviews exist */
-  rating: 0,
-  reviewCount: 0,
+  /** On-page guest testimonials (do not invent a larger public review count). */
+  rating: 5,
+  reviewCount: testimonials.length,
   sameAs: [] as string[],
   url: getSiteBaseUrl(),
 };

@@ -1,20 +1,10 @@
-import { brand } from "@/content/brand";
 import type { Metadata } from "next";
-import { Hero } from "@/components/site/Hero";
-import { HomeWelcome } from "@/components/site/HomeWelcome";
-import { BundleChooser } from "@/components/site/BundleChooser";
-import { InquiryPackagesTeaser } from "@/components/site/InquiryPackagesTeaser";
-import { HomeOurBoats } from "@/components/site/HomeOurBoats";
-import { HowItWorks } from "@/components/site/HowItWorks";
-import { PaymentOptions } from "@/components/site/PaymentOptions";
-import { Testimonials } from "@/components/site/Testimonials";
-import { GalleryPreview } from "@/components/site/GalleryPreview";
-import { LeadCapture } from "@/components/site/LeadCapture";
-import { HomeLocation } from "@/components/site/HomeLocation";
+import { headers } from "next/headers";
+import { brand } from "@/content/brand";
+import { WakeHomePage } from "@/components/site/home/WakeHomePage";
 import { PrefetchCriticalRoutes } from "@/components/site/PrefetchCriticalRoutes";
-import { SeoHubLinks } from "@/components/site/SeoHubLinks";
-import { getActiveExperiencesForPublic } from "@/lib/booking/get-experiences-public";
 import { getSiteBaseUrl, siteConfig } from "@/config/site";
+import { buildHomepageJsonLd } from "@/lib/seo/homepage-jsonld";
 
 const baseUrl = getSiteBaseUrl();
 const canonical = baseUrl;
@@ -46,38 +36,19 @@ export const metadata: Metadata = {
 };
 
 export default async function HomePage() {
-  let initialListings: Awaited<ReturnType<typeof getActiveExperiencesForPublic>> = [];
-  try {
-    initialListings = await getActiveExperiencesForPublic();
-  } catch {
-    // BundleChooser falls back to static experience content when empty
-  }
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
+  const jsonLd = JSON.stringify(buildHomepageJsonLd());
 
   return (
     <>
-      <PrefetchCriticalRoutes />
-      <Hero />
-      <HomeWelcome />
-      <BundleChooser
-        initialListings={initialListings.map((item) => ({
-          slug: item.slug,
-          title: item.title,
-          subtitle: item.subtitle,
-          heroMedia: item.heroMedia,
-          gallery: item.gallery,
-          fromPriceCents: item.fromPriceCents,
-          pricingType: item.pricingType,
-        }))}
+      <script
+        type="application/ld+json"
+        nonce={nonce}
+        suppressHydrationWarning
+        dangerouslySetInnerHTML={{ __html: jsonLd }}
       />
-      <HomeOurBoats />
-      <InquiryPackagesTeaser />
-      <HowItWorks />
-      <PaymentOptions />
-      <Testimonials />
-      <GalleryPreview />
-      <HomeLocation />
-      <SeoHubLinks variant="home" />
-      <LeadCapture />
+      <PrefetchCriticalRoutes />
+      <WakeHomePage />
     </>
   );
 }

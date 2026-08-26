@@ -2,11 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getTemplateById, updateTemplate } from "@/lib/waiver/firestore";
 import { updateWaiverTemplateSchema } from "@/lib/waiver/schema";
+import { requireFeatureResponse } from "@/lib/plan";
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  {
+  params }: { params: Promise<{ id: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(_request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 
@@ -29,8 +37,15 @@ export async function GET(
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  {
+  params }: { params: Promise<{ id: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

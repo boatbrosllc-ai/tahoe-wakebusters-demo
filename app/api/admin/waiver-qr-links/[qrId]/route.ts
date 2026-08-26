@@ -8,6 +8,7 @@ import {
   updateWaiverQrLink,
 } from "@/lib/waiver/waiver-qr-firestore";
 import { buildWaiverQrSignUrl } from "@/lib/waiver/qr-sign-url";
+import { requireFeatureResponse } from "@/lib/plan";
 
 const patchSchema = z.object({
   label: z.string().optional(),
@@ -18,8 +19,15 @@ const patchSchema = z.object({
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ qrId: string }> }
+  {
+  params }: { params: Promise<{ qrId: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 
@@ -48,8 +56,15 @@ export async function GET(
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ qrId: string }> }
+  {
+  params }: { params: Promise<{ qrId: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 
@@ -93,8 +108,15 @@ export async function PATCH(
 /** Retire this link and create a new active link for the same template (new URL — reprint required). */
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ qrId: string }> }
+  {
+  params }: { params: Promise<{ qrId: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

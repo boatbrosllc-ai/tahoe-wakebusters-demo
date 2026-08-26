@@ -9,6 +9,7 @@ import {
 } from "@/lib/booking/get-sitemap-data";
 import { SEO_SITEMAP_PATHS } from "@/lib/seo/paths";
 import { getSiteBaseUrl } from "@/config/site";
+import { hasFeature } from "@/lib/plan";
 
 
 const baseUrl = getSiteBaseUrl();
@@ -24,13 +25,13 @@ const staticPaths = [
   "/experiences",
   "/experiences/half-day",
   "/experiences/full-day",
-  "/packages",
+  ...(hasFeature("packages") ? ["/packages"] : []),
   "/location",
   "/boats",
   "/faqs",
   "/contact",
   "/our-story",
-  "/blog",
+  ...(hasFeature("blogStudio") ? ["/blog"] : []),
   "/menu",
   ...SEO_SITEMAP_PATHS,
 ];
@@ -93,6 +94,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   }
 
   for (const post of getStaticBlogPostsForSitemap()) {
+    if (!hasFeature("blogStudio")) break;
     addEntry(deduped, `${baseUrl}/blog/${encodeURIComponent(post.slug)}`, {
       lastModified: post.updatedAt ? new Date(post.updatedAt) : SITE_CONTENT_EPOCH,
       changeFrequency: "monthly",
@@ -117,6 +119,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   let firestoreBlogLoaded = false;
   try {
+    if (!hasFeature("blogStudio")) {
+      firestoreBlogLoaded = true;
+    } else {
     const posts = await getPublishedBlogPostsForSitemap();
     firestoreBlogLoaded = true;
     for (const post of posts) {
@@ -130,6 +135,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         changeFrequency: "monthly",
         priority: 0.7,
       });
+    }
     }
   } catch {
     // static blog entries already added as fallback

@@ -5,7 +5,6 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { Header } from "@/components/site/Header";
 import { Footer } from "@/components/site/Footer";
 import { PlatformDevBanner } from "@/components/site/PlatformDevBanner";
-import { MobileStickyBar } from "@/components/site/MobileStickyBar";
 import { NavProgress } from "@/components/site/NavProgress";
 import { BookingModalProvider } from "@/components/site/BookingModalContext";
 import { BookingPreload } from "@/components/site/BookingPreload";
@@ -57,16 +56,15 @@ function SiteChromeInner({
             /* Footer uses mt-[-72px] on mobile; waiver omitted MobileStickyBar but still needs the same bottom band so step CTAs are not covered */
             isWaiverSigning
               ? "pb-[calc(72px+env(safe-area-inset-bottom,0px))] sm:pb-12 lg:pb-14"
-              : "pb-[72px] lg:pb-0"
+              : "pb-[116px] lg:pb-0"
           )}
         >
           {children}
         </main>
         <Footer />
-        {!isWaiverSigning && <MobileStickyBar />}
       </div>
-      {/* Spacer for mobile bottom nav – match footer bg so no white strip */}
-      {!isWaiverSigning && <div className="h-24 lg:hidden bg-brand-dark" aria-hidden />}
+      {/* Spacer for mobile dock nav */}
+      {!isWaiverSigning && <div className="h-32 lg:hidden bg-[#F0F0F0]" aria-hidden />}
     </BookingModalProvider>
   );
 }

@@ -5,7 +5,6 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { brand } from "@/content/brand";
 import { siteConfig } from "@/config/site";
-import { OUR_BOAT_PATH } from "@/content/launch-boat";
 
 const WELCOME_PHOTO = siteConfig.media.welcome;
 
@@ -28,7 +27,7 @@ export function HomeWelcome() {
             transition={{ duration: 0.4 }}
           >
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-brand-secondary mb-3">
-              Welcome aboard
+              Family owned · Lake Tahoe locals
             </p>
             <h2
               id="home-welcome-heading"
@@ -37,16 +36,16 @@ export function HomeWelcome() {
               We&apos;re {brand.companyName}.
             </h2>
             <p className="mt-4 text-base sm:text-lg text-brand-muted leading-relaxed">
-              Private captained boat rentals. One boat, licensed captain and crew, and a day on the
-              water for first-timers and regulars alike.
+              Brothers Jarod and Bobby Minghini grew up on this lake. For 10+ years we&apos;ve been
+              sharing South Lake Tahoe with gas included, toys on every boat, and local knowledge you
+              can&apos;t get from an app — departing from Tahoe Keys Marina.
             </p>
             <p className="mt-4 text-base sm:text-lg text-brand-muted leading-relaxed">
-              Everyone on board is a guest. Customer service isn&apos;t a script. It&apos;s how we host.
-              From the first message to the last line in, our goal is simple: you enjoy the day.
+              Party barges, wakesurf charters, and luxury tritoons for groups of 2 to 40+. Birthdays,
+              bachelorettes, weddings, corporate days — we&apos;ve done it all.
             </p>
             <p className="mt-4 text-base sm:text-lg text-brand-muted leading-relaxed">
-              First time on the water? We&apos;ll walk you through the basics so you never feel lost.
-              Seasoned guest? We&apos;ll run the day the way you want it. Same boat, same crew, same respect.
+              Show up 20 minutes early, get a quick safety briefing, and the lake is yours.
             </p>
             <div className="mt-7 sm:mt-8 flex flex-col sm:flex-row flex-wrap items-center lg:items-stretch justify-center lg:justify-start gap-3">
               <Link
@@ -56,10 +55,10 @@ export function HomeWelcome() {
                 Read our story
               </Link>
               <Link
-                href={OUR_BOAT_PATH}
+                href="/experiences"
                 className="inline-flex items-center justify-center rounded-xl border-2 border-brand-dark/15 px-6 py-3.5 text-sm font-semibold text-brand-dark transition-colors hover:bg-brand-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-primary focus-visible:ring-offset-2"
               >
-                Meet the boat
+                See the fleet
               </Link>
             </div>
           </motion.div>

@@ -5,6 +5,10 @@
 
 import { brand } from "@/content/brand";
 import { bookingEnv } from "./env";
+import {
+  renderEmailLogisticsHtml,
+  type ExperienceEmailLogistics,
+} from "./experience-email-logistics";
 
 export interface BookingReminderParams {
   to: string;
@@ -12,7 +16,7 @@ export interface BookingReminderParams {
   experienceName: string;
   tripDate: string;
   startTime: string;
-  /** Location / meeting point text for display. */
+  /** Location / meeting point text for display (fallback if logistics is missing). */
   locationText: string;
   /** Address for map link (optional). */
   locationAddress?: string;
@@ -20,8 +24,10 @@ export interface BookingReminderParams {
   waiverSigningUrl?: string | null;
   /** Share link for additional party members (when party size &gt; 1). */
   waiverGroupSigningUrl?: string | null;
-  /** Short "what to bring" (e.g. from experience). */
+  /** Short "what to bring" (e.g. from experience). Used when logistics.whatToBring is empty. */
   whatToBring?: string[];
+  /** Per-experience pickup, fees, arrival, rules, gratuity. */
+  logistics?: ExperienceEmailLogistics;
 }
 
 const PRIMARY = "#14b6dc";
@@ -51,30 +57,13 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function mapUrl(address: string): string {
-  const q = encodeURIComponent(address.trim());
-  return `https://www.google.com/maps/search/?api=1&query=${q}`;
-}
-
-/** Shared block: marina directions and map. */
+/** Shared block: experience-specific pickup, fees, and before-you-go copy. */
 function sharedInstructionsHtml(params: BookingReminderParams): string {
-  const mapLink = params.locationAddress
-    ? mapUrl(params.locationAddress)
-    : params.locationText
-      ? mapUrl(params.locationText)
-      : null;
-  return `
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: ${BG}; border-radius: 12px; margin: 16px 0; border: 1px solid rgba(10,22,40,0.08);">
-    <tr>
-      <td style="padding: 20px 24px;">
-        <p style="margin: 0 0 12px; font-size: 14px; font-weight: 600; color: ${DARK};">📍 Marina meet-up</p>
-        <p style="margin: 0 0 8px; font-size: 14px; color: ${MUTED}; line-height: 1.5;">${escapeHtml(params.locationText)}</p>
-        ${mapLink ? `<p style="margin: 0 0 16px;"><a href="${escapeHtml(mapLink)}" target="_blank" rel="noopener" style="color: ${PRIMARY}; font-weight: 600;">View on map / Get directions</a></p>` : ""}
-        <p style="margin: 0 0 8px; font-size: 14px; color: ${MUTED}; line-height: 1.5;"><strong style="color: ${DARK};">Arrive a little early</strong> so we can load coolers, brief the crew, and cast off on time. Exact slip instructions are in your confirmation.</p>
-        <p style="margin: 0; font-size: 14px; color: ${MUTED}; line-height: 1.5;">Bring sunscreen, soft-soled shoes, sunglasses, and a soft cooler if you want drinks or snacks.</p>
-      </td>
-    </tr>
-  </table>`;
+  const logistics: ExperienceEmailLogistics = params.logistics ?? {
+    pickupAddress: params.locationAddress || params.locationText || undefined,
+    whatToBring: params.whatToBring ?? [],
+  };
+  return renderEmailLogisticsHtml(logistics);
 }
 
 /** Waiver block (only when waiverSigningUrl is set). */
@@ -114,7 +103,7 @@ export function buildReminder1WeekHtml(params: BookingReminderParams): string {
     ? waiverBlockHtml(params.waiverSigningUrl, params.waiverGroupSigningUrl)
     : "";
   const instructions = sharedInstructionsHtml(params);
-  const bring = whatToBringHtml(params.whatToBring);
+  const bring = params.logistics ? "" : whatToBringHtml(params.whatToBring);
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -148,7 +137,7 @@ export function buildReminder24hHtml(params: BookingReminderParams): string {
     ? waiverBlockHtml(params.waiverSigningUrl, params.waiverGroupSigningUrl)
     : "";
   const instructions = sharedInstructionsHtml(params);
-  const bring = whatToBringHtml(params.whatToBring);
+  const bring = params.logistics ? "" : whatToBringHtml(params.whatToBring);
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -182,7 +171,7 @@ export function buildReminderDayOfHtml(params: BookingReminderParams): string {
     ? waiverBlockHtml(params.waiverSigningUrl, params.waiverGroupSigningUrl)
     : "";
   const instructions = sharedInstructionsHtml(params);
-  const bring = whatToBringHtml(params.whatToBring);
+  const bring = params.logistics ? "" : whatToBringHtml(params.whatToBring);
   return `
 <!DOCTYPE html>
 <html lang="en">

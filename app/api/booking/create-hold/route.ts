@@ -27,6 +27,7 @@ import { getDepartureInventoryRef, reserveCapacity, getReservedSeats, applyNetCa
 import { sharedHoldResumeHasActiveDiscount } from "@/lib/booking/hold-resume-discount";
 import { hasOverlappingBlock, BlockCheckUnavailableError } from "@/lib/booking/has-overlapping-block";
 import { getTicketedAdminBlockImpact } from "@/lib/booking/ticketed-admin-blocks";
+import { requireFeatureResponse } from "@/lib/plan";
 import {
   assertSlotAvailable,
   SlotConflictError,
@@ -746,6 +747,8 @@ export async function POST(request: NextRequest) {
     let discountCodeApplied: string | undefined;
     let discountRef: import("firebase-admin").firestore.DocumentReference | null = null;
     if (input.discountCode) {
+      const planDenied = requireFeatureResponse("discounts");
+      if (planDenied) return planDenied;
       const discountSnap = await db.collection("discounts").where("code", "==", input.discountCode).limit(1).get();
       const discountDoc = discountSnap.empty ? null : (discountSnap.docs[0].data() as import("@/lib/booking/types").Discount);
       // Discount base = `pricing.totalCents` (subtotal before tip including tax and fees, excluding tip and discount). Must match validate-discount / `computePricing()`.
@@ -820,6 +823,10 @@ export async function POST(request: NextRequest) {
     const includeDepositLeadTimeInResponse =
       holdPayload.allowDeposit === true && holdPayload.bookingMode !== "shared";
     if (input.holdRequestId) holdPayload.clientHoldRequestId = input.holdRequestId;
+    if (input.adsAttribution) {
+      holdPayload.adsAttribution = input.adsAttribution;
+      holdPayload.adsChannel = input.adsAttribution.channel;
+    }
     if (tipCents > 0) holdPayload.tipCents = tipCents;
     if (discountCodeApplied && discountCents > 0) {
       holdPayload.discountCode = discountCodeApplied;

@@ -59,7 +59,36 @@ describe("mapPacketToSiteConfig", () => {
     assert.strictEqual(site.operations?.operatingHours?.startHour, 7);
     assert.strictEqual(site.business.taxRate, 0);
     assert.strictEqual(site.company.domain, "lakeaustincharters.com");
+    assert.strictEqual(site.plan, "full");
+    assert.strictEqual(site.features.waivers, true);
+    assert.strictEqual(site.features.discounts, true);
     assert.strictEqual(resolveAllowDepositFromConfig(site), true);
+  });
+
+  it("resolves lite plan feature flags", () => {
+    const raw = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+    raw.plan = "lite";
+    const validated = validateLaunchPacket(raw);
+    assert.strictEqual(validated.ok, true);
+    if (!validated.ok) return;
+    assert.ok(validated.warnings.some((w) => w.includes("plan is lite") && w.includes("waiver")));
+    const site = mapPacketToSiteConfig(validated.config);
+    assert.strictEqual(site.plan, "lite");
+    assert.strictEqual(site.features.waivers, false);
+    assert.strictEqual(site.features.blogStudio, false);
+    assert.strictEqual(site.features.packages, false);
+  });
+
+  it("allows featureOverrides to unlock a module on lite", () => {
+    const raw = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+    raw.plan = "lite";
+    raw.featureOverrides = { smsReminders: true };
+    const validated = validateLaunchPacket(raw);
+    assert.strictEqual(validated.ok, true);
+    if (!validated.ok) return;
+    const site = mapPacketToSiteConfig(validated.config);
+    assert.strictEqual(site.features.smsReminders, true);
+    assert.strictEqual(site.features.waivers, false);
   });
 });
 

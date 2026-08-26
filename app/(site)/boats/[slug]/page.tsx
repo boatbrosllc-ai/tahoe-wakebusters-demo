@@ -98,7 +98,7 @@ function BreadcrumbJsonLd({ boatName, slug, nonce }: { boatName: string; slug: s
     "@type": "BreadcrumbList",
     itemListElement: [
       { "@type": "ListItem", position: 1, name: "Home", item: baseUrl },
-      { "@type": "ListItem", position: 2, name: "Our Boat", item: `${baseUrl}/boats` },
+      { "@type": "ListItem", position: 2, name: "Our Fleet", item: `${baseUrl}/boats` },
       { "@type": "ListItem", position: 3, name: boatName, item: `${baseUrl}/boats/${encodeURIComponent(slug)}` },
     ],
   };

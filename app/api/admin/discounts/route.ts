@@ -6,9 +6,17 @@ import {
   normalizeDiscountCodeInput,
   validateAdminDiscountCodeLength,
 } from "@/lib/booking/discount-code-input";
+import { parseDiscountAssignmentFields } from "@/lib/booking/discount-assignment";
 import type { Discount } from "@/lib/booking/types";
+import { requireFeatureResponse } from "@/lib/plan";
 
 export async function GET(request: NextRequest) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("discounts");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 
@@ -43,6 +51,12 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("discounts");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 
@@ -57,6 +71,7 @@ export async function POST(request: NextRequest) {
     const expiresAtParam = typeof body.expiresAt === "string" ? body.expiresAt : null;
     const maxRedemptions = typeof body.maxRedemptions === "number" && body.maxRedemptions > 0 ? Math.floor(body.maxRedemptions) : undefined;
     const description = typeof body.description === "string" ? body.description.trim() : undefined;
+    const assignment = parseDiscountAssignmentFields(body as Record<string, unknown>);
 
     const codeLengthCheck = validateAdminDiscountCodeLength(code);
     if (!codeLengthCheck.ok) {
@@ -97,6 +112,8 @@ export async function POST(request: NextRequest) {
       usedCount: 0,
       active: true,
       ...(description && { description }),
+      ...(assignment.assignedTo && { assignedTo: assignment.assignedTo }),
+      ...(assignment.assignedToType && { assignedToType: assignment.assignedToType }),
       createdAt: Timestamp.fromDate(now),
     };
 

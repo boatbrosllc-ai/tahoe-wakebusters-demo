@@ -10,12 +10,20 @@ import {
 import { computeContentStats } from "@/lib/blog/content-stats";
 import { buildSchemaFields } from "@/lib/blog/schema-jsonld";
 import type { ContentBlock } from "@/lib/blog/types";
+import { requireFeatureResponse } from "@/lib/plan";
 
 /** POST /api/admin/blog/[postId]/restore — restore from a version snapshot */
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ postId: string }> }
+  {
+  params }: { params: Promise<{ postId: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("blogStudio");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

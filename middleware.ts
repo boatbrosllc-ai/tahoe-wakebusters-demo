@@ -87,6 +87,7 @@ export async function middleware(request: NextRequest) {
   requestHeaders.set("x-nonce", nonce);
   /** Lets server components read the request path without a client hook (avoids nonce hydration issues in JSON-LD). */
   requestHeaders.set("x-pathname", pathname);
+  requestHeaders.set("x-method", request.method);
 
   if (isAdminPublicPath(pathname)) {
     const res = NextResponse.next({ request: { headers: requestHeaders } });

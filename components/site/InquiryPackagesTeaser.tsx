@@ -5,12 +5,14 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { ArrowUpRight } from "lucide-react";
 import { inquiryPackages, INQUIRY_PARTNER_DISCLAIMER } from "@/content/inquiry-packages";
+import { hasFeature } from "@/lib/plan";
 
 function packageMeta(pkg: (typeof inquiryPackages)[number]): string {
   return [pkg.guests, pkg.nights, pkg.fishingDays, pkg.boats].filter(Boolean).join(" · ");
 }
 
 export function InquiryPackagesTeaser() {
+  if (!hasFeature("packages")) return null;
   return (
     <section
       className="relative overflow-hidden bg-brand-dark section-padding"

@@ -18,6 +18,7 @@ import {
   ChevronRight,
   Sparkles,
 } from "lucide-react";
+import { hasFeature } from "@/lib/plan";
 
 type DashboardStats = {
   totalRevenueCents: number;
@@ -344,13 +345,13 @@ export default function AdminHomePage() {
           {/* KPI row */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
-              href="/admin/financials"
+              href={hasFeature("financials") ? "/admin/financials" : "/admin/bookings"}
               label="Revenue (all time)"
               value={formatCents(stats.totalRevenueCents)}
               icon={DollarSign}
             />
             <StatCard
-              href="/admin/financials"
+              href={hasFeature("financials") ? "/admin/financials" : "/admin/bookings"}
               label="This month"
               value={formatCents(stats.revenueThisMonthCents)}
               sub={`Last month: ${formatCents(stats.revenueLastMonthCents ?? 0)}`}
@@ -509,6 +510,7 @@ export default function AdminHomePage() {
                 <BookOpen className="h-4 w-4" aria-hidden />
                 Bookings
               </Link>
+              {hasFeature("financials") ? (
               <Link
                 href="/admin/financials"
                 className="inline-flex min-h-[48px] items-center gap-2 rounded-xl border-2 border-brand-dark/15 bg-white px-5 py-2.5 text-sm font-medium text-brand-dark transition-colors hover:border-brand-primary/30 hover:bg-brand-bg/50"
@@ -516,6 +518,7 @@ export default function AdminHomePage() {
                 <DollarSign className="h-4 w-4" aria-hidden />
                 Financials
               </Link>
+              ) : null}
               <Link
                 href="/admin/emails"
                 className="inline-flex min-h-[48px] items-center gap-2 rounded-xl border-2 border-brand-dark/15 bg-white px-5 py-2.5 text-sm font-medium text-brand-dark transition-colors hover:border-brand-primary/30 hover:bg-brand-bg/50"

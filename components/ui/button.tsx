@@ -10,7 +10,8 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-brand-primary text-white hover:bg-brand-primary/90 shadow-soft",
+        // Wakebusters Book Now = orange (--secondary); teal stays for accents/outlines
+        default: "bg-brand-secondary text-white hover:bg-brand-secondary/90 shadow-soft",
         secondary: "bg-brand-secondary text-white hover:bg-brand-secondary/90",
         accent: "bg-brand-secondary text-white hover:bg-brand-secondary/90",
         outline: "border-2 border-brand-primary text-brand-primary hover:bg-brand-primary/10",

@@ -1,13 +1,11 @@
-import { brand } from "@/content/brand";
 /**
- * Guest testimonials — placeholder copy for the platform development site.
+ * Guest testimonials — adapted from public Tahoe Wakebusters reviews.
  */
 
 export interface Testimonial {
   id: string;
   quote: string;
   author: string;
-  /** Optional: "a month ago", "6 months ago", etc. */
   when?: string;
   rating?: number;
 }
@@ -16,41 +14,41 @@ export const testimonials: Testimonial[] = [
   {
     id: "1",
     quote:
-      "Booked a half-day online and everything was straightforward. Captain and crew were sharp, and first-timers in our group felt looked after.",
-    author: "Marcus Hale",
-    when: "a month ago",
+      "Is it too much to say we have Tahoe Wakebusters to thank for one of the most fun days of our lives? We rented the pontoon for 4th of July with Jarod as our captain. Water slides, tubes, floats, a cooler, grill, and sound system — the absolute best boating experience from start to finish.",
+    author: "Krysta W.",
+    when: "via Yelp",
     rating: 5,
   },
   {
     id: "2",
     quote:
-      "Full-day trip was well run from dock check-in to the ride home. Clear communication before we arrived.",
-    author: "Elena Vargas",
-    when: "2 months ago",
+      "We rented for my bachelorette party and Bobby was the best driver ever!! Exceptional value — first tank of gas was free! Bobby knew the lake perfectly and took us to Emerald Bay and Camp Richardson.",
+    author: "Hannah C. R.",
+    when: "via Yelp",
     rating: 5,
   },
   {
     id: "3",
     quote:
-      "Sunset trip with friends — golden light and a crew that kept everything fun and safe. Perfect for mixed experience levels.",
-    author: "Jordan Reed",
-    when: "3 months ago",
+      "Rented the double decker pontoon with slides and a BBQ grill — had a blast! Bobby and his team were super nice and responsive, even helped us find parking.",
+    author: "Monique T.",
+    when: "via Yelp",
     rating: 5,
   },
   {
     id: "4",
     quote:
-      `${brand.companyName} delivered exactly what we wanted: a private captained boat, no guesswork, and an easy booking flow.`,
-    author: "Priya Shah",
-    when: "a month ago",
+      "Amazing time! Customer service was fantastic, cheaper than other places on the lake, and super flexible with scheduling. They were right on time and got us out on the lake.",
+    author: "Chris R.",
+    when: "via Yelp",
     rating: 5,
   },
   {
     id: "5",
     quote:
-      "Family of five on a half-day. The crew was patient and encouraging. We would book again.",
-    author: "Chris Delgado",
-    when: "4 months ago",
+      "Boat rental with driver and tubes over Labor Day for a bachelorette party!! We couldn't have asked for a better time. Such a hidden gem.",
+    author: "Paige H.",
+    when: "via Yelp",
     rating: 5,
   },
 ];

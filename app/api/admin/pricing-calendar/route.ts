@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { ALLOWED_BOAT_TYPES } from "@/lib/booking/boat-types";
+import { requireFeatureResponse } from "@/lib/plan";
 
 const COLLECTION = "pricingCalendar";
 
@@ -71,6 +72,12 @@ async function getActiveHoldsOnAffectedDates(boatType: string, dates: string[]):
 }
 
 export async function GET(request: NextRequest) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("pricingCalendar");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 
@@ -106,6 +113,12 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("pricingCalendar");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

@@ -23,6 +23,7 @@ import {
   type ReminderType,
 } from "./reminder-emails";
 import type { Booking } from "./types";
+import type { ExperienceEmailLogistics } from "./experience-email-logistics";
 import { signReceiptToken } from "./receiptToken";
 import { DEPOSIT_FRACTION } from "./constants";
 
@@ -136,6 +137,8 @@ export interface BookingEmailContext {
   pricingType?: "charter" | "ticketed";
   /** Pre-resolved addon names summary for confirmation email (e.g. "Cooler: qty 1, Towel: qty 2"). */
   addonsSummary?: string;
+  /** Per-experience pickup / arrival / rules logistics for HTML confirmation. */
+  logistics?: ExperienceEmailLogistics;
 }
 
 function getSender(): { name: string; email: string } {
@@ -248,6 +251,14 @@ export async function sendBookingConfirmationEmail(
           manageLink: "",
           /** Optional bookmark when `RECEIPT_TOKEN_SECRET` is set; empty string otherwise. Confirmation HTML is the receipt — not a separate receipt link. */
           receiptLink: receiptLinkResolved,
+          pickupTitle: context.logistics?.pickupTitle ?? "",
+          pickupAddress: context.logistics?.pickupAddress ?? "",
+          locationNotes: context.logistics?.locationNotes ?? "",
+          entranceFeeText: context.logistics?.entranceFeeText ?? "",
+          arrivalInstructions: context.logistics?.arrivalInstructions ?? "",
+          rulesText: context.logistics?.rulesText ?? "",
+          gratuityText: context.logistics?.gratuityText ?? "",
+          additionalNotes: context.logistics?.additionalNotes ?? "",
         },
       }
     : {
@@ -954,4 +965,94 @@ export async function upsertBrevoContact(
     const text = await res.text();
     throw new Error(`Brevo contact upsert failed: ${res.status} ${text}`);
   }
+}
+
+export async function sendCaptainTripEmail(opts: {
+  to: string;
+  captainName: string;
+  kind: import("./email-templates").CaptainTripEmailKind;
+  params: import("./email-templates").CaptainTripEmailParams;
+  idempotencyKey?: string;
+}): Promise<BrevoSendResult> {
+  const {
+    getCaptainAssignmentSubject,
+    getCaptainUnassignedSubject,
+    renderCaptainAssignmentHtml,
+    renderCaptainUnassignedHtml,
+  } = await import("./email-templates");
+  const params = { ...opts.params, captainName: opts.captainName, kind: opts.kind };
+  const isRemoval = opts.kind === "unassigned" || opts.kind === "cancelled";
+  const subject = isRemoval ? getCaptainUnassignedSubject(params) : getCaptainAssignmentSubject(params);
+  const html = isRemoval ? renderCaptainUnassignedHtml(params) : renderCaptainAssignmentHtml(params);
+  const res = await sendWithRetry(
+    `${BREVO_API_BASE}/smtp/email`,
+    {
+      sender: getSender(),
+      to: [{ email: opts.to.trim(), name: opts.captainName.trim() || undefined }],
+      subject,
+      htmlContent: html,
+    } as Record<string, unknown>,
+    { idempotencyKey: opts.idempotencyKey }
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Brevo captain send failed: ${res.status} ${text}`);
+  }
+  return { subject, providerMessageId: await parseBrevoProviderMessageId(res) };
+}
+
+/**
+ * One-off admin CRM email to a customer or lead. Reply-To is the ops inbox so guests can reply.
+ */
+export async function sendAdminCrmEmail(params: {
+  to: string;
+  toName?: string;
+  subject: string;
+  htmlContent: string;
+}): Promise<{ providerMessageId?: string }> {
+  const to = params.to.trim();
+  const toName = params.toName?.trim() || undefined;
+  const sender = getSender();
+  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
+    sender,
+    to: [{ email: to, name: toName }],
+    replyTo: { email: getStaffOperationsEmail(), name: sender.name },
+    subject: params.subject,
+    htmlContent: params.htmlContent,
+  } as Record<string, unknown>);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Brevo send failed: ${res.status} ${text}`);
+  }
+  return { providerMessageId: await parseBrevoProviderMessageId(res) };
+}
+
+/** Password-setup email for an invited operator or captain. */
+export async function sendTeamInviteEmail(params: {
+  to: string;
+  toName?: string;
+  roleLabel: string;
+  resetLink: string;
+}): Promise<{ providerMessageId?: string }> {
+  const { getTeamInviteSubject, renderTeamInviteHtml } = await import("./email-templates");
+  const to = params.to.trim();
+  const toName = params.toName?.trim() || undefined;
+  const roleLabel = params.roleLabel === "Operator" ? "Operator" : "Captain";
+  const subject = getTeamInviteSubject(roleLabel);
+  const htmlContent = renderTeamInviteHtml({
+    toName: toName || "there",
+    roleLabel,
+    resetLink: params.resetLink,
+  });
+  const res = await sendWithRetry(`${BREVO_API_BASE}/smtp/email`, {
+    sender: getSender(),
+    to: [{ email: to, name: toName }],
+    subject,
+    htmlContent,
+  } as Record<string, unknown>);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Brevo send failed: ${res.status} ${text}`);
+  }
+  return { providerMessageId: await parseBrevoProviderMessageId(res) };
 }

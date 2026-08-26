@@ -5,6 +5,7 @@
 
 import type { Firestore } from "firebase-admin/firestore";
 import type { DocumentSnapshot } from "firebase-admin/firestore";
+import { hasFeature } from "@/lib/plan";
 
 const COLLECTION = "pricingCalendar";
 
@@ -35,6 +36,7 @@ export async function fetchMergedPricingCalendarRatesForBoatTypes(
   db: Firestore,
   boatTypes: string[]
 ): Promise<Record<string, number> | undefined> {
+  if (!hasFeature("pricingCalendar")) return undefined;
   const uniqueSorted = Array.from(new Set(boatTypes.map((t) => t.trim()).filter(Boolean))).sort();
   if (uniqueSorted.length === 0) return undefined;
   const snaps = await fetchPricingCalendarSnapsForBoatTypes(db, uniqueSorted);

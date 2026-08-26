@@ -9,6 +9,7 @@ import { checkRateLimitValidateDiscount, getClientKey } from "@/lib/booking/rate
 import { generateIncidentCode } from "@/lib/booking/debug";
 import { computeValidateDiscountTotalCents } from "@/lib/booking/compute-validate-discount-total";
 import type { BookingPricing, Discount, Hold } from "@/lib/booking/types";
+import { requireFeatureResponse } from "@/lib/plan";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,12 @@ const MIN_TOTAL_CENTS_SANITY = 100;
 /** Discount base = `pricing.totalCents` (subtotal before tip including tax and fees, excluding tip and discount). Must match `computePricing()` output. */
 
 export async function POST(request: NextRequest) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("discounts");
+    if (planDenied) return planDenied;
+  }
+
   const clientKey = getClientKey(request);
   const rl = await checkRateLimitValidateDiscount(clientKey);
   if (!rl.allowed) {

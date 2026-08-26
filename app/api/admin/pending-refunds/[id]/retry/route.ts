@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
+import { requireFeatureResponse } from "@/lib/plan";
 
-export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(request: NextRequest, {
+  params }: { params: Promise<{ id: string }> }) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("advancedRefunds");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

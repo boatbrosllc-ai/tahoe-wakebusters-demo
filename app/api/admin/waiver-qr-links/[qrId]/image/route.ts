@@ -3,11 +3,19 @@ import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-fireb
 import { getWaiverQrLinkById } from "@/lib/waiver/waiver-qr-firestore";
 import { buildWaiverQrSignUrl } from "@/lib/waiver/qr-sign-url";
 import { waiverQrToPngBuffer, waiverQrToSvgString } from "@/lib/waiver/render-qr-code";
+import { requireFeatureResponse } from "@/lib/plan";
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ qrId: string }> }
+  {
+  params }: { params: Promise<{ qrId: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

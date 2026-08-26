@@ -7,7 +7,10 @@ import {
   getAdminSessionCookieName,
   getAdminSessionVerifyOutcome,
   verifyAdminSessionCookie,
+  emailMaySignInToAdmin,
+  getAdminPrincipalFromSessionCookie,
 } from "@/lib/admin-auth-firebase";
+import { homePathForAdminRole } from "@/lib/admin/roles";
 import { getFirebaseApp } from "@/lib/booking/firebase-admin";
 import { getResolvedFirebaseProjectId } from "@/lib/booking/env";
 
@@ -181,13 +184,13 @@ export async function POST(request: NextRequest) {
     }
     const decoded = await app.auth().verifyIdToken(idToken);
     const email = decoded.email?.trim().toLowerCase();
-    if (!email || !allowed.includes(email)) {
+    if (!email || !(await emailMaySignInToAdmin(email))) {
       return NextResponse.json(
         {
           error: "Not authorized for admin",
           code: "ADMIN_EMAIL_NOT_ALLOWED",
           hint:
-            "Your password was accepted by Firebase, but this app only allows the exact email address(es) listed in the server ADMIN_EMAIL variable. Sign in with that address (check for typos and extra characters).",
+            "Your password was accepted by Firebase, but this account is not an admin. Sign in as the Super Admin (ADMIN_EMAIL) or an invited team member.",
           ...(email ? { signedInEmail: email } : {}),
         },
         { status: 403 }
@@ -195,8 +198,12 @@ export async function POST(request: NextRequest) {
     }
 
     const sessionCookie = await createAdminSessionCookie(idToken);
+    const principal = await getAdminPrincipalFromSessionCookie(
+      `${getAdminSessionCookieName()}=${sessionCookie}`
+    );
+    const redirect = homePathForAdminRole(principal?.role ?? "super_admin");
     const name = getAdminSessionCookieName();
-    const res = NextResponse.json({ ok: true, redirect: "/admin" }, { status: 200 });
+    const res = NextResponse.json({ ok: true, redirect, role: principal?.role ?? null }, { status: 200 });
     res.cookies.set(name, sessionCookie, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",

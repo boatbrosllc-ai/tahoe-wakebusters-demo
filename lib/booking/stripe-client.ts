@@ -9,21 +9,53 @@ import type { ExperienceAddon } from "./types";
 import type { ExperienceRate } from "./types";
 
 let stripe: Stripe | null = null;
+let stripeFinancials: Stripe | null = null;
+
+function stripeApiVersion(): Stripe.LatestApiVersion {
+  const version =
+    typeof (Stripe as unknown as { LatestApiVersion?: string }).LatestApiVersion === "string"
+      ? (Stripe as unknown as { LatestApiVersion: string }).LatestApiVersion
+      : "2024-09-30.acacia";
+  return version as Stripe.LatestApiVersion;
+}
+
+function createStripeClient(secretKey: string, connectAccount?: string): Stripe {
+  return new Stripe(secretKey, {
+    apiVersion: stripeApiVersion(),
+    ...(connectAccount ? { stripeAccount: connectAccount } : {}),
+  });
+}
 
 export function getStripe(): Stripe {
   if (!stripe) {
-    // Use the stable API version shipped with this SDK; see https://docs.stripe.com/api/versioning
-    const version = typeof (Stripe as unknown as { LatestApiVersion?: string }).LatestApiVersion === "string"
-      ? (Stripe as unknown as { LatestApiVersion: string }).LatestApiVersion
-      : "2024-09-30.acacia";
-    stripe = new Stripe(bookingEnv.stripeSecretKey, {
-      apiVersion: version as Stripe.LatestApiVersion,
-      ...(process.env.STRIPE_CONNECT_ACCOUNT_ID?.trim()
-        ? { stripeAccount: process.env.STRIPE_CONNECT_ACCOUNT_ID.trim() }
-        : {}),
-    });
+    stripe = createStripeClient(
+      bookingEnv.stripeSecretKey,
+      process.env.STRIPE_CONNECT_ACCOUNT_ID?.trim() || undefined
+    );
   }
   return stripe;
+}
+
+/** Prefer STRIPE_LIVE_SECRET_KEY for admin Financials when checkout still uses test keys. */
+export function stripeFinancialsSecretKey(): string | undefined {
+  const live = process.env.STRIPE_LIVE_SECRET_KEY?.trim();
+  if (live) return live;
+  const fallback = process.env.STRIPE_SECRET_KEY?.trim() || process.env.STRIPE_CONNECT_SECRET_KEY?.trim();
+  return fallback || undefined;
+}
+
+export function getStripeForFinancials(): Stripe {
+  if (!stripeFinancials) {
+    const key = stripeFinancialsSecretKey();
+    if (!key) {
+      throw new Error("Missing STRIPE_LIVE_SECRET_KEY or STRIPE_SECRET_KEY");
+    }
+    stripeFinancials = createStripeClient(
+      key,
+      process.env.STRIPE_CONNECT_ACCOUNT_ID?.trim() || undefined
+    );
+  }
+  return stripeFinancials;
 }
 
 function rateBaseCents(rate: Rate | ExperienceRate): number {

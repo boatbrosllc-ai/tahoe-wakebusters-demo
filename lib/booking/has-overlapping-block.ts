@@ -22,7 +22,10 @@ export async function hasOverlappingBlock(opts: {
   slotStart: Date;
   slotEnd: Date;
   get?: (q: Query) => Promise<QuerySnapshot>;
+  /** Block document ids to ignore (e.g. matching guest placeholders being converted). */
+  ignoreBlockIds?: string[];
 }): Promise<boolean> {
   const { docs } = await fetchBlockDocsOverlappingSlot(opts);
-  return docs.length > 0;
+  const ignore = new Set((opts.ignoreBlockIds ?? []).filter(Boolean));
+  return docs.some((d) => !ignore.has(d.id));
 }

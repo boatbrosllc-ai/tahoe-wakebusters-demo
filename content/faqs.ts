@@ -1,7 +1,4 @@
 import { brand } from "@/content/brand";
-/**
- * Global FAQs — ${brand.companyName} charter policy and FAQ content.
- */
 
 export interface FaqItem {
   id: string;
@@ -13,119 +10,111 @@ export function getFaqById(id: string): FaqItem | undefined {
   return faqs.find((f) => f.id === id);
 }
 
+/** Homepage FAQ block — order matches the SEO copy brief. */
+export const HOMEPAGE_FAQ_IDS = [
+  "gas-included",
+  "drive-boat",
+  "whats-included",
+  "capacity",
+  "departures",
+  "north-shore",
+  "occasions",
+  "delivery",
+  "bad-weather",
+  "how-to-book",
+] as const;
+
+export function getHomepageFaqs(): FaqItem[] {
+  return HOMEPAGE_FAQ_IDS.map((id) => getFaqById(id)).filter((f): f is FaqItem => Boolean(f));
+}
+
 export const faqs: FaqItem[] = [
+  {
+    id: "gas-included",
+    question: "Is gas really included in your boat rentals?",
+    answer:
+      "Yes. Every Tahoe Wakebusters charter includes a full tank of gas at no extra charge. Most Lake Tahoe boat rental companies charge you for fuel on return — we build it into the rate so you know the number before you leave the dock.",
+  },
+  {
+    id: "drive-boat",
+    question: "Do I need a captain to rent a boat on Lake Tahoe?",
+    answer:
+      "With us, yes — every charter runs with a USCG-certified captain. It means no boater education card, no navigating the Tahoe Keys channel yourself, and no one in your group stuck driving all day. Captain fees are quoted separately and confirmed before you book.",
+  },
+  {
+    id: "whats-included",
+    question: "What's included with a Tahoe boat rental?",
+    answer:
+      "Full tank of gas, water toys and floaties, tubes, coolers, premium Bluetooth stereo, and life jackets and safety gear for every guest. Wakesurf charters add boards, wakeboards, and skis. The party barge adds a BBQ grill and dual waterslides.",
+  },
+  {
+    id: "capacity",
+    question: "How many people can you accommodate?",
+    answer:
+      "Individual boats hold 10 to 13 guests. For larger groups we run multiple boats together — we regularly handle parties of 40 or more.",
+  },
+  {
+    id: "departures",
+    question: "Where do your Lake Tahoe boat rentals depart from?",
+    answer:
+      "All charters depart from Tahoe Keys Marina in South Lake Tahoe, CA. Arrive 20 minutes early for parking and loading (first come, first served).",
+  },
+  {
+    id: "north-shore",
+    question: "Do you serve North Lake Tahoe?",
+    answer:
+      "We operate out of South Lake Tahoe. If you're staying on the North Shore, we're roughly an hour's drive around the lake — plenty of our guests make the trip. Delivery may be available; call to ask.",
+  },
+  {
+    id: "occasions",
+    question: "What occasions do you handle?",
+    answer:
+      "Bachelor and bachelorette parties, birthdays, weddings, corporate outings, family reunions, and 4th of July. After ten years, we've probably done your occasion.",
+  },
+  {
+    id: "delivery",
+    question: "Do you offer boat delivery?",
+    answer: `Delivery and multi-day rentals are available on request. Call ${brand.phone} for pricing.`,
+  },
+  {
+    id: "bad-weather",
+    question: "What happens if the weather is bad?",
+    answer:
+      "We run a flexible weather policy. If Tahoe doesn't cooperate, we work with you to reschedule.",
+  },
+  {
+    id: "how-to-book",
+    question: "How do I book?",
+    answer: `Reserve online for instant confirmation, or call ${brand.phone} to talk it through first.`,
+  },
+  {
+    id: "life-jackets",
+    question: "Are life jackets provided?",
+    answer:
+      "All life jackets are included. Children 12 and under are required to wear a vest at all times — we outfit them at the start of the charter.",
+  },
+  {
+    id: "parking",
+    question: "Do you offer parking?",
+    answer:
+      "Parking is available at Tahoe Keys Marina and is first come, first served. Arrive 20 minutes early for parking and loading.",
+  },
   {
     id: "cancellation-policy",
     question: "What is your cancellation policy?",
     answer:
-      "Free cancellations until 30 days before the charter start time. 50% refund for cancellations between 15–30 days before start. Cancellations within 14 days of the start time are non-refundable. Weather cancellations by the captain are handled separately (see below).",
+      "Cancel up to 7 days before your charter for a full refund. If weather doesn't cooperate, we'll work with you on a rain check or full refund. No-shows without notice are non-refundable.",
   },
   {
-    id: "bad-weather",
-    question: "What happens if there is bad weather?",
+    id: "pets",
+    question: "Are pets allowed?",
     answer:
-      "Safety comes first. Overcast skies or light chop usually do not cancel a trip. If wind, seas, or conditions are unsafe, the captain may delay, shorten, or cancel. When we cancel for weather, we will reschedule or refund per the booking terms.",
+      "Well-behaved pets are welcome aboard. Let us know in advance so we can make sure your furry friend has a great day too.",
   },
   {
-    id: "tipping-captain",
-    question: "Tipping the captain and crew",
+    id: "what-to-bring",
+    question: "What should we bring?",
     answer:
-      `Gratuity for captain and crew is customary — typically 15–20% of the charter price when you’ve had a great day. You can tip in cash or ask us about adding a tip on card. If something didn’t meet expectations, email ${brand.email} with details so we can make it right.`,
-  },
-  {
-    id: "tip-on-card",
-    question: "Can I leave a tip on the card?",
-    answer:
-      "Yes — ask us at booking or after the trip and we can add a tip to the card on file when available.",
-  },
-  {
-    id: "split-payment",
-    question: "Can we split the payment?",
-    answer:
-      "We can split payment in two. Among your group, Venmo or similar apps work well for settling up.",
-  },
-  {
-    id: "whats-included",
-    question: "What’s included on the charter?",
-    answer:
-      "Licensed captain and crew, tackle, bait, and ice are included on standard charters. Bring sunscreen, soft-soled shoes, sunglasses, and any drinks or snacks you want (soft coolers preferred). Specific inclusions are confirmed when you book.",
-  },
-  {
-    id: "licenses",
-    question: "Do I need a Mexican fishing license?",
-    answer:
-      "Fishing licenses for guests are typically arranged as part of the charter. We’ll confirm what’s covered when you book so you’re legal on the water.",
-  },
-  {
-    id: "minimum-booking",
-    question: "Is there a minimum charter length?",
-    answer:
-      "Half-day trips are our most popular minimum. Full-day and sunset options are also available depending on season and the bite.",
-  },
-  {
-    id: "what-we-target",
-    question: "What fish do you target?",
-    answer:
-      "The captain picks the plan for the day based on conditions.",
-  },
-  {
-    id: "drive-boat",
-    question: "Can we run the boat ourselves?",
-    answer:
-      `No. ${brand.companyName} charters are captained only. You fish; we handle the boat, safety, and navigation.`,
-  },
-  {
-    id: "seasickness",
-    question: "What if someone gets seasick?",
-    answer:
-      "If you’re prone to motion sickness, take preventative medication before departure and stay midship with a horizon view. Morning trips and calmer days help. Tell the crew early if someone feels off.",
-  },
-  {
-    id: "bring-food-drink",
-    question: "Can I bring food and drinks?",
-    answer:
-      "Yes — soft coolers, cans, and plastic are preferred. No glass on deck when possible. Keep alcohol responsible; the captain has the final say on safety.",
-  },
-  {
-    id: "where-meet",
-    question: "Where do we meet?",
-    answer:
-      "We meet at the dock. Exact slip, dock instructions, and check-in time are in your confirmation email. Arrive a bit early so we can load coolers and brief everyone before departure.",
-  },
-  {
-    id: "catch-keep",
-    question: "Can we keep what we catch?",
-    answer:
-      "Yes within Mexican regulations and size limits. Many guests keep fish for dinner or ask about local cleaning/filleting options. Billfish are often catch-and-release — we’ll guide you on the day.",
-  },
-  {
-    id: "kids",
-    question: "Are kids allowed?",
-    answer:
-      "Yes on private charters when weather and trip length make sense. Life jackets are available; bring a well-fitting vest for young children if you have one. Ask us about the best trip length for families.",
-  },
-  {
-    id: "how-many",
-    question: "How many anglers per trip?",
-    answer:
-      "Typical private charters accommodate up to 6 guests. Confirm capacity when you book — more people can mean less time with a rod in hand.",
-  },
-  {
-    id: "experience-needed",
-    question: "Do I need fishing experience?",
-    answer:
-      "No. First-timers are welcome. The crew will set lines, coach technique, and help with hookups so you can focus on the fight.",
-  },
-  {
-    id: "radio",
-    question: "Is there music / Bluetooth on the boat?",
-    answer:
-      "Most trips have Bluetooth audio so you can play a playlist. Volume stays reasonable so we can hear bites and radios.",
-  },
-  {
-    id: "lost-found",
-    question: "Do you have a lost & found?",
-    answer:
-      `Email ${brand.email} or call the number on your confirmation as soon as you notice something missing. We’ll check the boat and marina.`,
+      "Ice, food & beverages, towels, sunscreen, personal medications, and a downloaded playlist (cell service can be spotty). Limit glass — bring solo cups.",
   },
 ];

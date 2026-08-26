@@ -26,6 +26,7 @@ import {
   type ReminderTemplateKey,
 } from "@/lib/booking/reminder-retry";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
+import { emailFieldsFromExperience } from "@/lib/booking/experience-email-logistics";
 import {
   getRequestById,
   buildWaiverSigningUrlFromTokenId,
@@ -120,13 +121,16 @@ export async function POST(request: NextRequest) {
     let locationText = "We'll send exact meeting point before your trip.";
     let locationAddress = "";
     let whatToBring: string[] = [];
+    let logistics: ReturnType<typeof emailFieldsFromExperience>["logistics"] | undefined;
     if (booking.experienceId) {
       const exp = await getExperience(booking.experienceId);
       if (exp) {
         experienceName = exp.title ?? experienceName;
-        locationText = exp.location?.addressText ?? locationText;
-        locationAddress = exp.location?.addressText ?? "";
-        whatToBring = exp.whatToBring ?? [];
+        const fields = emailFieldsFromExperience(exp, locationText);
+        locationText = fields.locationText;
+        locationAddress = fields.logistics.pickupAddress ?? "";
+        whatToBring = fields.logistics.whatToBring;
+        logistics = fields.logistics;
       }
     }
     const toEmail = booking.customer?.email?.trim();
@@ -156,6 +160,7 @@ export async function POST(request: NextRequest) {
       waiverSigningUrl,
       waiverGroupSigningUrl,
       whatToBring,
+      logistics,
     };
     const claimed = await tryClaimSend(db, bookingId, templateKey);
     if (!claimed) continue;
@@ -275,14 +280,17 @@ export async function POST(request: NextRequest) {
         let locationText = "We'll send exact meeting point before your trip.";
         let locationAddress = "";
         let whatToBring: string[] = [];
+        let logistics: ReturnType<typeof emailFieldsFromExperience>["logistics"] | undefined;
 
         if (booking.experienceId) {
           const exp = await getExperience(booking.experienceId);
           if (exp) {
             experienceName = exp.title ?? experienceName;
-            locationText = exp.location?.addressText ?? locationText;
-            locationAddress = exp.location?.addressText ?? "";
-            whatToBring = exp.whatToBring ?? [];
+            const fields = emailFieldsFromExperience(exp, locationText);
+            locationText = fields.locationText;
+            locationAddress = fields.logistics.pickupAddress ?? "";
+            whatToBring = fields.logistics.whatToBring;
+            logistics = fields.logistics;
           }
         }
 
@@ -318,6 +326,7 @@ export async function POST(request: NextRequest) {
           waiverSigningUrl,
           waiverGroupSigningUrl,
           whatToBring,
+          logistics,
         };
 
         const templateKey =

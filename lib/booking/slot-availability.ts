@@ -62,6 +62,8 @@ export type AssertSlotAvailableOpts = {
   runSameDaySlotScan: boolean;
   /** Slot document ids to ignore during same-day scan (e.g. current slot during hold resume). */
   ignoreSlotDocIds?: string[];
+  /** Block document ids to ignore (e.g. marketplace converting a matching guest block). */
+  ignoreBlockIds?: string[];
 };
 
 /**
@@ -85,6 +87,7 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
     excludeBookingId,
     runSameDaySlotScan,
     ignoreSlotDocIds,
+    ignoreBlockIds,
   } = opts;
   const slotStartMs = slotStart.getTime();
   const slotEndMs = slotEnd.getTime();
@@ -142,6 +145,7 @@ export async function assertSlotAvailable(opts: AssertSlotAvailableOpts): Promis
     boatId,
     slotStart,
     slotEnd,
+    ignoreBlockIds,
     // hasOverlappingBlock only issues query reads; adapt the wider transaction getter.
     get: (q) =>
       get(q as import("firebase-admin/firestore").Query) as Promise<

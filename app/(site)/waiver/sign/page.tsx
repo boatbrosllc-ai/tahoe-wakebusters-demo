@@ -4,8 +4,11 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { WaiverSigningWizard } from "@/components/waiver/WaiverSigningWizard";
 import type { WaiverValidateResponse } from "@/lib/waiver/types";
+import { hasFeature } from "@/lib/plan";
+import { PlanFeatureLocked } from "@/components/admin/PlanFeatureLocked";
 
 export default function WaiverSignPage() {
+  const waiversEnabled = hasFeature("waivers");
   const searchParams = useSearchParams();
   const token = searchParams.get("token")?.trim() ?? "";
   const group = searchParams.get("group")?.trim() ?? "";
@@ -15,6 +18,10 @@ export default function WaiverSignPage() {
   const [invalid, setInvalid] = useState<string | null>(null);
 
   const runValidate = useCallback(() => {
+    if (!waiversEnabled) {
+      setLoading(false);
+      return;
+    }
     if (!token && !group && !qr) {
       setInvalid("Missing signing link. Please use the link from your email, group invite, or QR code.");
       setLoading(false);
@@ -64,11 +71,19 @@ export default function WaiverSignPage() {
         setData(null);
       })
       .finally(() => setLoading(false));
-  }, [token, group, qr]);
+  }, [token, group, qr, waiversEnabled]);
 
   useEffect(() => {
     runValidate();
   }, [runValidate]);
+
+  if (!waiversEnabled) {
+    return (
+      <div className="container mx-auto w-full min-w-0 max-w-lg px-4 py-6 sm:py-8">
+        <PlanFeatureLocked feature="waivers" />
+      </div>
+    );
+  }
 
   if (loading) {
     return (

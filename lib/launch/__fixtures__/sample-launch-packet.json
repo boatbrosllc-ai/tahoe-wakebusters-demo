@@ -24,6 +24,7 @@
     "areaServed": ["Lake Austin", "Austin, TX"]
   },
   "timezone": "America/Chicago",
+  "plan": "full",
   "booking": {
     "depositFraction": 0.5,
     "minimumNoticeHours": 48,

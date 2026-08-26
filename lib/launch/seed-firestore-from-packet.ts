@@ -11,6 +11,7 @@ import { resolveExperienceSlugReference, resolveFirestoreExperienceSlug } from "
 import type { SiteConfig } from "@/config/site-types";
 import { resolveAllowDepositFromConfig } from "@/lib/booking/booking-policy-copy";
 import { createTemplate, listTemplates, updateTemplate } from "@/lib/waiver/firestore";
+import { hasFeature } from "@/lib/plan";
 import type { CreateWaiverTemplateInput } from "@/lib/waiver/schema";
 
 export type SeedFirestoreFromPacketResult =
@@ -369,7 +370,9 @@ export async function seedFirestoreFromPacket(
     const db = getDb();
     const { experienceIds, slugToId } = await seedExperiences(db, packet, siteConfig);
     const boatIds = await seedBoats(db, packet, siteConfig, slugToId);
-    const waiverTemplateId = await seedWaiverTemplate(packet);
+    const waiverTemplateId = hasFeature("waivers", siteConfig)
+      ? await seedWaiverTemplate(packet)
+      : undefined;
     const blackoutBlocks = await seedBlackoutBlocks(db, packet, slugToId);
     await seedOperationsSettings(db, packet);
 

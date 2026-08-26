@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { analytics } from "@/lib/analytics";
+import { getStoredAdsAttribution } from "@/lib/ads/attribution-client";
 import { cn } from "@/lib/utils";
 
 export function LeadCapture() {
@@ -19,7 +20,11 @@ export function LeadCapture() {
       const res = await fetch("/api/lead", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), source: "home_lead_capture" }),
+        body: JSON.stringify({
+          email: email.trim(),
+          source: "home_lead_capture",
+          adsAttribution: getStoredAdsAttribution(),
+        }),
       });
       if (!res.ok) throw new Error("Submit failed");
       analytics.leadSubmit("home_lead_capture", "home");

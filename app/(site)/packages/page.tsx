@@ -1,7 +1,9 @@
 import { brand } from "@/content/brand";
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 import { PackagesPageClient } from "@/components/site/PackagesPageClient";
 import { getSiteBaseUrl } from "@/config/site";
+import { hasFeature } from "@/lib/plan";
 
 
 const baseUrl = getSiteBaseUrl();
@@ -21,5 +23,6 @@ export const metadata: Metadata = {
 };
 
 export default function PackagesInquiryPage() {
+  if (!hasFeature("packages")) notFound();
   return <PackagesPageClient />;
 }

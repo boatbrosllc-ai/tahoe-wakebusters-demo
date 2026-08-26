@@ -2,11 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { getStorageBucket } from "@/lib/booking/firebase-admin";
 import { getRequestById } from "@/lib/waiver/firestore";
+import { requireFeatureResponse } from "@/lib/plan";
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: Promise<{ requestId: string }> }
+  {
+  params }: { params: Promise<{ requestId: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(_request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

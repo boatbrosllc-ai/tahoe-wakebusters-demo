@@ -11,14 +11,14 @@ import { BookingCTA } from "./BookingCTA";
 import { TrustRow } from "./TrustRow";
 import { useBookingModal } from "./BookingModalContext";
 
-/** Full-bleed hero — default stock charter photo from siteConfig.media. */
+/** Full-bleed hero — Tahoe Wakebusters lake photo. */
 const HERO_IMAGE = siteConfig.media.hero;
 
 const bullets = [
-  "Private captained trips",
-  "Half Day & Full Day options",
-  "10+ payment options · BNPL",
-  "Captain & crew included",
+  "Party barges · Wakesurf · Tritoons",
+  "Gas & toys included",
+  "Tahoe Keys Marina",
+  "USCG captains available",
 ];
 
 export function Hero() {
@@ -105,8 +105,8 @@ export function Hero() {
             animate={{ opacity: 1, y: 0 }}
             transition={skipEntrance ? { duration: 0 } : { duration: 0.45, delay: 0.1 }}
           >
-            <h1 className="font-bold tracking-tight text-white leading-tight text-[clamp(0.6rem,3.2vw,1rem)] sm:text-xl md:text-3xl lg:text-3xl xl:text-3xl 2xl:text-4xl">
-              Private Boat Rentals
+            <h1 className="font-bold tracking-tight text-white leading-tight text-[clamp(1.35rem,5vw,2.75rem)] sm:text-3xl md:text-4xl lg:text-5xl">
+              {brand.companyName}
             </h1>
             <motion.p
               className="mt-3 text-sm text-white/90 max-w-md mx-auto sm:mt-4 sm:text-base md:text-lg lg:mt-5 lg:text-lg lg:max-w-2xl xl:text-xl xl:max-w-2xl"
@@ -114,7 +114,7 @@ export function Hero() {
               animate={{ opacity: 1, y: 0 }}
               transition={skipEntrance ? { duration: 0 } : { duration: 0.45, delay: 0.18 }}
             >
-              Half Day &amp; Full Day captained trips — book online. Captain and crew included.
+              {brand.tagline} Party barges, wakesurf charters, and luxury tritoons on Lake Tahoe — book online.
             </motion.p>
           </motion.div>
 

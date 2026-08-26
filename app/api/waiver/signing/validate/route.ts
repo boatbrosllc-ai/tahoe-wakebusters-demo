@@ -13,6 +13,7 @@ import {
 import { getWaiverQrLinkById } from "@/lib/waiver/waiver-qr-firestore";
 import type { WaiverValidateResponse } from "@/lib/waiver/types";
 import { toValidateTemplatePayload } from "@/lib/waiver/to-validate-template-payload";
+import { requireFeatureResponse } from "@/lib/plan";
 
 async function buildBookingSummary(bookingId: string): Promise<{ experienceName: string; tripDate: string; startTime?: string; endTime?: string; partySize?: number }> {
   const db = getDb();
@@ -46,6 +47,12 @@ async function buildBookingSummary(bookingId: string): Promise<{ experienceName:
 }
 
 export async function GET(request: NextRequest) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const token = request.nextUrl.searchParams.get("token")?.trim();
   const group = request.nextUrl.searchParams.get("group")?.trim();
   const qr = request.nextUrl.searchParams.get("qr")?.trim();

@@ -3,6 +3,7 @@
  */
 
 import type { CreateHoldInput } from "@/lib/booking/types";
+import { parseAdsAttributionFromUnknown } from "@/lib/ads/attribution";
 import { validatePhone } from "@/lib/booking/validate-phone";
 import { BOOKING_EMAIL_REGEX } from "@/lib/booking/validate-email";
 
@@ -125,6 +126,7 @@ export function parseCreateHoldBody(body: unknown): ParseCreateHoldBodyResult {
   }
   const release_token =
     typeof o.release_token === "string" && o.release_token.trim() ? o.release_token.trim() : undefined;
+  const adsAttribution = parseAdsAttributionFromUnknown(o.adsAttribution);
   return {
     input: {
       boatId: boatId ?? undefined,
@@ -147,6 +149,7 @@ export function parseCreateHoldBody(body: unknown): ParseCreateHoldBodyResult {
       resumeHoldId,
       holdRequestId,
       ...(release_token ? { release_token } : {}),
+      ...(adsAttribution ? { adsAttribution } : {}),
     },
   };
 }

@@ -1,8 +1,12 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Mail, FileText, Send, Inbox } from "lucide-react";
+import { Send, Inbox } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  ConfirmationEmailCopyEditor,
+  type ConfirmationCopyDraft,
+} from "@/components/admin/ConfirmationEmailCopyEditor";
 
 type EmailTemplateMeta = {
   id: string;
@@ -33,6 +37,7 @@ export default function AdminEmailsPage() {
   const [logLoading, setLogLoading] = useState(true);
   const [templatesLoading, setTemplatesLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [copyDraft, setCopyDraft] = useState<ConfirmationCopyDraft | null>(null);
   const [outboxStats, setOutboxStats] = useState<{
     pending: number;
     deadLetter: number;
@@ -66,17 +71,23 @@ export default function AdminEmailsPage() {
     }
   }, [selectedId]);
 
-  const fetchPreview = useCallback(async (templateId: string) => {
+  const fetchPreview = useCallback(async (templateId: string, draft?: ConfirmationCopyDraft | null) => {
     setPreviewLoading(true);
-    setPreviewHtml("");
     try {
-      const res = await fetch(`/api/admin/email-preview?templateId=${encodeURIComponent(templateId)}`, {
+      const res = await fetch("/api/admin/email-preview", {
+        method: "POST",
         credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          templateId,
+          experienceTitle: draft?.experienceTitle,
+          logistics: draft?.logistics,
+        }),
       });
       if (!res.ok) throw new Error("Failed to load preview");
       const html = await res.text();
       setPreviewHtml(html);
-    } catch (e) {
+    } catch {
       setPreviewHtml("<p style='padding:16px;color:#c00'>Failed to load preview.</p>");
     } finally {
       setPreviewLoading(false);
@@ -127,8 +138,12 @@ export default function AdminEmailsPage() {
   }, [fetchTemplates, fetchLog, fetchOutboxStats]);
 
   useEffect(() => {
-    if (selectedId) fetchPreview(selectedId);
-  }, [selectedId, fetchPreview]);
+    if (!selectedId) return;
+    const handle = window.setTimeout(() => {
+      void fetchPreview(selectedId, copyDraft);
+    }, 350);
+    return () => window.clearTimeout(handle);
+  }, [selectedId, copyDraft, fetchPreview]);
 
   function formatSentAt(iso: string | null) {
     if (!iso) return "—";
@@ -147,7 +162,9 @@ export default function AdminEmailsPage() {
     <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Email notifications</h1>
-        <p className="mt-1 text-sm text-brand-muted">Templates we send and a log of emails sent.</p>
+        <p className="mt-1 text-sm text-brand-muted">
+          Edit pickup and reminder copy per listing, preview templates, and review send logs.
+        </p>
       </div>
 
       {error && (
@@ -155,6 +172,65 @@ export default function AdminEmailsPage() {
           {error}
         </div>
       )}
+
+      <div className="grid min-h-[28rem] grid-cols-1 items-stretch gap-6 xl:grid-cols-2">
+        <div className="min-h-[28rem] min-w-0">
+          <ConfirmationEmailCopyEditor onDraftChange={setCopyDraft} />
+        </div>
+        <div className="flex min-h-[28rem] min-w-0 flex-col overflow-hidden rounded-3xl border border-brand-dark/10 bg-white shadow-sm">
+          <div className="shrink-0 border-b border-brand-dark/10 px-4 py-3 sm:px-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-brand-muted">Preview</p>
+                <p className="text-sm font-semibold text-brand-dark">
+                  {selectedTemplate?.name ?? "Email"}
+                  {copyDraft?.experienceTitle ? (
+                    <span className="font-normal text-brand-muted"> · {copyDraft.experienceTitle}</span>
+                  ) : null}
+                </p>
+              </div>
+              {previewLoading ? <span className="text-xs text-brand-muted">Updating…</span> : null}
+            </div>
+            {templatesLoading ? (
+              <p className="mt-3 text-xs text-brand-muted">Loading templates…</p>
+            ) : (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {templates.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setSelectedId(t.id)}
+                    className={cn(
+                      "rounded-full px-3 py-1.5 text-xs font-semibold transition-all",
+                      selectedId === t.id
+                        ? "bg-brand-dark text-white"
+                        : "bg-brand-bg text-brand-muted hover:bg-brand-dark/10 hover:text-brand-dark"
+                    )}
+                  >
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="min-h-0 flex-1 bg-brand-bg/20 p-4">
+            <div className="mx-auto w-full max-w-[560px] overflow-hidden rounded-xl border border-brand-dark/10 bg-white shadow-lg">
+              {previewHtml ? (
+                <iframe
+                  title="Email preview"
+                  srcDoc={previewHtml}
+                  className="w-full min-h-[420px] border-0"
+                  sandbox="allow-same-origin"
+                />
+              ) : (
+                <div className="flex min-h-[420px] items-center justify-center text-sm text-brand-muted">
+                  {previewLoading ? "Loading preview…" : "Select a template to preview."}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div className="rounded-2xl border-2 border-brand-dark/10 bg-white p-4 shadow-sm space-y-6">
         <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-brand-muted mb-3">
@@ -283,76 +359,6 @@ export default function AdminEmailsPage() {
         ) : (
           <p className="text-sm text-brand-muted">Could not load outbox stats.</p>
         )}
-      </div>
-
-      {/* Two columns: template list | HTML preview */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3 lg:gap-8">
-        <div className="lg:col-span-1">
-          <div className="rounded-2xl border-2 border-brand-dark/10 bg-white p-4 shadow-sm">
-            <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-brand-muted mb-4">
-              <FileText className="h-4 w-4" />
-              Email templates
-            </h2>
-            {templatesLoading ? (
-              <p className="text-sm text-brand-muted">Loading…</p>
-            ) : templates.length === 0 ? (
-              <p className="text-sm text-brand-muted">No templates.</p>
-            ) : (
-              <ul className="space-y-1">
-                {templates.map((t) => (
-                  <li key={t.id}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedId(t.id)}
-                      className={cn(
-                        "w-full rounded-xl px-4 py-3 text-left transition-all",
-                        selectedId === t.id
-                          ? "bg-brand-primary/15 text-brand-dark ring-2 ring-brand-primary/40"
-                          : "hover:bg-brand-bg/80 text-brand-muted hover:text-brand-dark"
-                      )}
-                    >
-                      <span className="block font-medium text-brand-dark">{t.name}</span>
-                      <span className="block text-xs text-brand-muted mt-0.5">{t.description}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-
-        <div className="lg:col-span-2">
-          <div className="rounded-2xl border-2 border-brand-dark/10 bg-white overflow-hidden shadow-sm">
-            <div className="border-b border-brand-dark/10 px-4 py-3 flex items-center justify-between bg-brand-bg/30">
-              <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-brand-muted">
-                <Mail className="h-4 w-4" />
-                HTML preview
-                {selectedTemplate && (
-                  <span className="font-normal normal-case text-brand-dark">— {selectedTemplate.name}</span>
-                )}
-              </h2>
-              {previewLoading && (
-                <span className="text-xs text-brand-muted">Loading…</span>
-              )}
-            </div>
-            <div className="min-h-[360px] bg-brand-bg/20 flex items-stretch justify-center p-4">
-              <div className="w-full max-w-[560px] bg-white rounded-xl shadow-lg overflow-hidden border border-brand-dark/10">
-                {previewHtml ? (
-                  <iframe
-                    title="Email preview"
-                    srcDoc={previewHtml}
-                    className="w-full min-h-[420px] border-0"
-                    sandbox="allow-same-origin"
-                  />
-                ) : (
-                  <div className="min-h-[420px] flex items-center justify-center text-brand-muted text-sm">
-                    {previewLoading ? "Loading preview…" : "Select a template to preview."}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* Sent emails log */}

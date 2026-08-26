@@ -83,6 +83,7 @@ import { BookingSuccessPanel } from "@/components/site/booking-modal-steps/Booki
 import { usePriceSummary } from "@/components/site/usePriceSummary";
 import { usePaymentSummary } from "@/components/site/usePaymentSummary";
 import { useDiscountValidation } from "@/components/site/useDiscountValidation";
+import { hasFeature } from "@/lib/plan";
 import type { ExperienceItem, BoatOption, SlotDto, AddonOption } from "@/lib/booking/booking-modal-types";
 import type { BookingModalInitialSelection } from "@/components/site/BookingModalContext";
 import { useBookingModalData, type UseBookingModalDataSelection } from "@/components/site/useBookingModalData";
@@ -3791,6 +3792,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                   )}
 
                   {/* Discount code */}
+                  {hasFeature("discounts") ? (
                   <div className="space-y-2 pt-1">
                     <p className="text-xs font-semibold uppercase tracking-wider text-brand-muted">Discount or promo code</p>
                     <div className="flex flex-wrap items-center gap-2">
@@ -3831,6 +3833,7 @@ export function BookingModal({ open, onOpenChange, initialSelection, selectionKe
                       </p>
                     )}
                   </div>
+                  ) : null}
                   {/* Optional — above cancellation so policy ack is last before pay */}
                   <div className="space-y-2 pt-1">
                     <button

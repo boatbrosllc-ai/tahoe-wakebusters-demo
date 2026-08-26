@@ -49,6 +49,35 @@ export function resolveRevenueSummaryMonthDocId(booking: Booking): string | null
 
 type FieldValueLike = { increment: (n: number) => unknown };
 
+/** Global + monthly + per-experience revenue counters (booking create, cancel, or payout patch). */
+export function applyAttributedRevenueDelta(
+  tx: Transaction,
+  db: Firestore,
+  FieldValue: FieldValueLike,
+  opts: {
+    experienceId?: string | null;
+    summaryMonthKey?: string | null;
+    revenueDeltaCents: number;
+    bookingCountDelta: number;
+  }
+): void {
+  const revenueDeltaCents = opts.revenueDeltaCents;
+  const bookingCountDelta = opts.bookingCountDelta;
+  if (revenueDeltaCents === 0 && bookingCountDelta === 0) return;
+  const globalPatch: Record<string, unknown> = {};
+  if (revenueDeltaCents !== 0) globalPatch.totalRevenueCents = FieldValue.increment(revenueDeltaCents);
+  if (bookingCountDelta !== 0) globalPatch.bookingCount = FieldValue.increment(bookingCountDelta);
+  tx.set(db.collection("summaries").doc("revenue"), globalPatch, { merge: true });
+  const mk = typeof opts.summaryMonthKey === "string" ? opts.summaryMonthKey.trim() : "";
+  if (mk) {
+    const monthPatch: Record<string, unknown> = {};
+    if (revenueDeltaCents !== 0) monthPatch.revenueCents = FieldValue.increment(revenueDeltaCents);
+    if (bookingCountDelta !== 0) monthPatch.bookingCount = FieldValue.increment(bookingCountDelta);
+    tx.set(db.collection("summaries").doc(mk), monthPatch, { merge: true });
+  }
+  applyExperienceRevenueDelta(tx, db, FieldValue, opts.experienceId, revenueDeltaCents, bookingCountDelta);
+}
+
 /** Increment or decrement per-experience summary counters (forward-only until legacy backfill). */
 export function applyExperienceRevenueDelta(
   tx: Transaction,

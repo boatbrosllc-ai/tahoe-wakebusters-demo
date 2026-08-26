@@ -10,6 +10,7 @@ import {
 } from "@/lib/blog/firestore";
 import { updateBlogPostSchema } from "@/lib/blog/schema";
 import type { ContentBlock } from "@/lib/blog/types";
+import { requireFeatureResponse } from "@/lib/plan";
 
 /** Remove undefined values from an object so Firestore accepts it. */
 function stripUndefined<T extends Record<string, unknown>>(obj: T): Record<string, unknown> {
@@ -24,8 +25,15 @@ function stripUndefined<T extends Record<string, unknown>>(obj: T): Record<strin
 /** GET /api/admin/blog/[postId] — get one post. */
 export async function GET(
   _request: NextRequest,
-  { params }: { params: Promise<{ postId: string }> }
+  {
+  params }: { params: Promise<{ postId: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("blogStudio");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(_request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 
@@ -49,8 +57,15 @@ export async function GET(
 /** PATCH /api/admin/blog/[postId] — save (draft) update. */
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ postId: string }> }
+  {
+  params }: { params: Promise<{ postId: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("blogStudio");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 
@@ -148,8 +163,15 @@ export async function PATCH(
 /** DELETE /api/admin/blog/[postId] — permanently delete a post. */
 export async function DELETE(
   _request: NextRequest,
-  { params }: { params: Promise<{ postId: string }> }
+  {
+  params }: { params: Promise<{ postId: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("blogStudio");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(_request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

@@ -29,10 +29,17 @@ import { buildWaiverHtml } from "@/lib/waiver/waiver-html";
 import { generateWaiverPdf } from "@/lib/waiver/pdf";
 import { uploadWaiverSignatureDataUrl } from "@/lib/waiver/upload-signature-to-storage";
 import type { WaiverSignedPayload, WaiverSigned, WaiverTemplateSnapshot } from "@/lib/waiver/types";
+import { requireFeatureResponse } from "@/lib/plan";
 
 const MAX_SIGNATURE_PAYLOAD_LENGTH = 500_000; // ~500KB for data URL
 
 export async function POST(request: NextRequest) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const rl = await checkRateLimit(getClientKey(request));
   if (!rl.allowed) {
     const retryAfter = rl.retryAfterMs ? Math.ceil(rl.retryAfterMs / 1000) : 60;

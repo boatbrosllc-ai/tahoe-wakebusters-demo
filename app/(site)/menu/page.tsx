@@ -40,11 +40,11 @@ const pageLinks = [
     href: "/experiences",
     label: "Charters",
     icon: Compass,
-    description: "Half-day, full-day & sunset fishing trips",
+    description: "Party barge, wakesurf charter, and luxury tritoon",
   },
   {
     href: OUR_BOAT_PATH,
-    label: "Our Boat",
+    label: siteConfig.nav.boatLabel || "Our Fleet",
     icon: Ship,
     description: "Meet the boat for your charter",
   },

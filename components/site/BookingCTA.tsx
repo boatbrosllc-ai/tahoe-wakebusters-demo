@@ -26,6 +26,8 @@ export interface BookingCTAProps {
   dense?: boolean;
   /** Override primary button label (e.g. SEO "Check availability") */
   primaryLabel?: string;
+  /** Override call button label (e.g. "Call (775) 241-4039") */
+  callLabel?: string;
 }
 
 export function BookingCTA({
@@ -42,6 +44,7 @@ export function BookingCTA({
   onBookNowClick,
   dense = false,
   primaryLabel,
+  callLabel,
 }: BookingCTAProps) {
   const handleBookClick = () => {
     analytics.bookCtaClick(source, page, experience);
@@ -56,6 +59,7 @@ export function BookingCTA({
     : "/booking";
 
   const primaryButtonLabel = primaryLabel?.trim() || "Book now";
+  const callButtonLabel = callLabel?.trim() || "Call Now";
   const phone = getPublicPhone();
   const showCallButton = Boolean(showCall);
   const callHref = phone ? `tel:${phone.tel}` : "/contact";
@@ -111,7 +115,7 @@ export function BookingCTA({
               aria-label={callAriaLabel}
             >
               <Phone className="h-4 w-4" aria-hidden />
-              Call Now
+              {callButtonLabel}
             </a>
           ) : (
             <Link
@@ -121,7 +125,7 @@ export function BookingCTA({
               aria-label={callAriaLabel}
             >
               <Phone className="h-4 w-4" aria-hidden />
-              Call Now
+              {callButtonLabel}
             </Link>
           ))}
       </div>
@@ -173,7 +177,7 @@ export function BookingCTA({
               aria-label={callAriaLabel}
             >
               <Phone className="h-4 w-4" aria-hidden />
-              Call Now
+              {callButtonLabel}
             </a>
           ) : (
             <Link
@@ -186,7 +190,7 @@ export function BookingCTA({
               aria-label={callAriaLabel}
             >
               <Phone className="h-4 w-4" aria-hidden />
-              Call Now
+              {callButtonLabel}
             </Link>
           ))}
       </div>

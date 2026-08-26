@@ -4,15 +4,18 @@
 
 :root {
   /* Fallback theme tokens. Active site overrides these on <html> via siteThemeCssVars(). */
-  --brand-primary: #14b6dc;
-  --brand-secondary: #f27a0a;
-  --brand-accent: #f27a0a;
-  --brand-dark: #04244a;
-  --brand-muted: #1a5a7a;
-  --brand-bg: #e8f6fa;
-  --brand-silver: #d5dbe1;
-  --brand-text: #04244a;
-  --brand-radius: 1rem;
+  /* Wakebusters fallbacks (overridden by siteThemeCssVars on <html>) */
+  --brand-primary: #00b4d8;
+  --brand-secondary: #ff6b2b;
+  --brand-accent: #0096b7;
+  --brand-dark: #0a1628;
+  --brand-muted: #7a8899;
+  --brand-bg: #f7f9fc;
+  --brand-silver: #c8d0dd;
+  --brand-text: #1a2535;
+  --brand-radius: 0.75rem;
+  --demo-bg: #ffffff;
+  --demo-text: #1a1a1a;
 }
 
 @layer base {

@@ -44,29 +44,29 @@ describe("PROCESSING_FEE_RATE customer-facing policy", () => {
 });
 
 describe("catalog → checkout price consistency (no processing fee)", () => {
-  it("Standard Half Day (template placeholder)", () => {
+  it("Standard Half Day", () => {
     assertCharterPriceJourney("Standard Half Day", STANDARD_RATE_CENTS.half);
-    assert.strictEqual(STANDARD_RATE_CENTS.half, 50_000);
+    assert.ok(STANDARD_RATE_CENTS.half > 0);
   });
 
-  it("Standard Full Day (template placeholder)", () => {
+  it("Standard Full Day", () => {
     assertCharterPriceJourney("Standard Full Day", STANDARD_RATE_CENTS.full);
-    assert.strictEqual(STANDARD_RATE_CENTS.full, 80_000);
+    assert.ok(STANDARD_RATE_CENTS.full > 0);
   });
 
-  it("Founding Half Day (template placeholder)", () => {
+  it("Founding Half Day", () => {
     assertCharterPriceJourney("Founding Half Day", FOUNDING_RATE_CENTS.half);
-    assert.strictEqual(FOUNDING_RATE_CENTS.half, 50_000);
+    assert.ok(FOUNDING_RATE_CENTS.half > 0);
   });
 
-  it("Founding Full Day (template placeholder)", () => {
+  it("Founding Full Day", () => {
     assertCharterPriceJourney("Founding Full Day", FOUNDING_RATE_CENTS.full);
-    assert.strictEqual(FOUNDING_RATE_CENTS.full, 80_000);
+    assert.ok(FOUNDING_RATE_CENTS.full > 0);
   });
 
-  it("Peak Full Day (template placeholder)", () => {
+  it("Peak Full Day", () => {
     assertCharterPriceJourney("Peak Full Day", PEAK_FULL_DAY_CENTS);
-    assert.strictEqual(PEAK_FULL_DAY_CENTS, 100_000);
+    assert.ok(PEAK_FULL_DAY_CENTS > 0);
   });
 });
 

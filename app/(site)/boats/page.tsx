@@ -20,12 +20,12 @@ const canonical = `${baseUrl}/boats`;
 export const revalidate = 60;
 
 export const metadata: Metadata = {
-  title: `Our Boat | ${brand.companyName}`,
+  title: `Our Fleet | ${brand.companyName}`,
   description: `Meet the boat. Licensed captain & crew included. ${brand.companyName}.`,
   keywords: ["charter boat", `${brand.companyName} boat`, "private boat rental"],
   alternates: { canonical },
   openGraph: {
-    title: `Our Boat | ${brand.companyName}`,
+    title: `Our Fleet | ${brand.companyName}`,
     description: "Meet the boat. Captain & crew included.",
     url: canonical,
     siteName: brand.companyName,
@@ -54,10 +54,10 @@ export default async function BoatsHubPage() {
         <div className="absolute inset-0 bg-gradient-to-br from-brand-primary/20 via-transparent to-brand-secondary/10" />
         <div className="container-narrow relative z-10 mx-auto flex flex-col items-center justify-center text-center">
           <h1 id="boats-hero-heading" className="text-3xl font-bold tracking-tight text-white sm:text-4xl lg:text-5xl">
-            Our Boats
+            Our Fleet
           </h1>
           <p className="mx-auto mt-4 max-w-2xl text-lg text-white/90 sm:text-xl">
-            Our boats—every charter includes a licensed captain and crew.
+            Party barge, wakesurf charter, and luxury tritoon — every rental includes a USCG-certified captain.
           </p>
         </div>
       </section>
@@ -65,7 +65,7 @@ export default async function BoatsHubPage() {
       <section className="section-padding bg-white" aria-labelledby="boats-grid-heading">
         <div className="container-wide px-4 sm:px-6 lg:px-8">
           <h2 id="boats-grid-heading" className="sr-only">
-            Our boats
+            Our fleet
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5 lg:gap-6">
             {boats.map((boat) => {

@@ -10,7 +10,8 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        display: ["var(--font-display)", "system-ui", "sans-serif"],
+        display: ["var(--font-display)", "Roboto Slab", "Georgia", "serif"],
+        sans: ["var(--font-sans)", "Montserrat", "system-ui", "sans-serif"],
       },
       colors: {
         brand: {
@@ -44,11 +45,31 @@ const config: Config = {
           from: { opacity: "0", transform: "translateY(8px)" },
           to: { opacity: "1", transform: "translateY(0)" },
         },
+        "wake-marquee": {
+          from: { transform: "translateX(0)" },
+          to: { transform: "translateX(-50%)" },
+        },
+        "wake-marquee-reverse": {
+          from: { transform: "translateX(-50%)" },
+          to: { transform: "translateX(0)" },
+        },
+        marquee: {
+          from: { transform: "translateX(0)" },
+          to: { transform: "translateX(calc(-100% - var(--gap)))" },
+        },
+        "marquee-vertical": {
+          from: { transform: "translateY(0)" },
+          to: { transform: "translateY(calc(-100% - var(--gap)))" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
         "skeleton-reveal": "skeleton-reveal 0.35s ease-out forwards",
+        "wake-marquee": "wake-marquee 48s linear infinite",
+        "wake-marquee-reverse": "wake-marquee-reverse 56s linear infinite",
+        marquee: "marquee var(--duration, 40s) infinite linear",
+        "marquee-vertical": "marquee-vertical var(--duration, 40s) linear infinite",
       },
     },
   },

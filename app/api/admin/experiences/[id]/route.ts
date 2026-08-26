@@ -10,6 +10,7 @@ import type {
   ExperienceLocation,
   ExperienceCancellationPolicy,
   ExperienceSeasonal,
+  ExperienceConfirmationEmail,
 } from "@/lib/booking/types";
 import { BOOKING_STATUSES_SLOT_TAKEN } from "@/lib/booking/types";
 import { HOLD_EXPIRY_MINUTES } from "@/lib/booking/constants";
@@ -23,6 +24,7 @@ import { normalizeTicketedWeekdaysInput, ticketedWeekdaysForFirestore } from "@/
 import { sanitizeCssObjectPosition } from "@/lib/image-position";
 import { sanitizePhotoUrls } from "@/lib/boats/validation";
 import { getChicagoToday } from "@/lib/booking/booking-date-range";
+import { parseConfirmationEmail } from "@/lib/booking/experience-email-logistics";
 
 /** Remove undefined from object (and array elements) so Firestore update/set accepts it. Leaves null and other values. */
 function stripUndefined<T>(obj: T): T {
@@ -110,6 +112,7 @@ function parseBody(
   heroMedia: { type: "image" | "video"; url: string };
   gallery: string[];
   location: ExperienceLocation;
+  confirmationEmail: ExperienceConfirmationEmail;
   maxGuests: number;
   petsMax: number;
   included: string[];
@@ -183,6 +186,9 @@ function parseBody(
       addressText: typeof loc.addressText === "string" ? loc.addressText.trim() : "",
       notes: typeof loc.notes === "string" ? loc.notes.trim() : undefined,
     };
+  }
+  if (b.confirmationEmail && typeof b.confirmationEmail === "object") {
+    out.confirmationEmail = parseConfirmationEmail(b.confirmationEmail);
   }
   if (typeof b.maxGuests === "number" && b.maxGuests >= 0) out.maxGuests = Math.floor(b.maxGuests);
   if (typeof b.petsMax === "number" && b.petsMax >= 0) out.petsMax = Math.floor(b.petsMax);

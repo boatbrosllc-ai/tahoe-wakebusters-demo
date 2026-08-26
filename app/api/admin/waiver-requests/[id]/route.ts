@@ -3,11 +3,19 @@ import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-fireb
 import { getDb } from "@/lib/booking/firebase-admin";
 import { getRequestById, updateRequest } from "@/lib/waiver/firestore";
 import { waiverRequestDocToAdminJson } from "@/lib/waiver/admin-api-serialize";
+import { requireFeatureResponse } from "@/lib/plan";
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  {
+  params }: { params: Promise<{ id: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(_request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 
@@ -64,8 +72,15 @@ export async function GET(
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  {
+  params }: { params: Promise<{ id: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

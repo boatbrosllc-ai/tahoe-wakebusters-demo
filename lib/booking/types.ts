@@ -93,6 +93,24 @@ export interface ExperienceLocation {
   notes?: string;
 }
 
+/**
+ * Customer-facing confirmation/reminder copy that varies by experience.
+ * Pickup title, address, and dock notes stay on {@link ExperienceLocation}.
+ * Empty optional strings are omitted from emails.
+ */
+export interface ExperienceConfirmationEmail {
+  /** Park/entrance/parking fee instructions. Omit to hide the fee row. */
+  entranceFeeText?: string;
+  /** e.g. arrive 10–15 minutes before departure. */
+  arrivalInstructions?: string;
+  /** Lake/boat rules for the email (may differ from listing `rules`). */
+  rulesText?: string;
+  /** Captain gratuity reminder. */
+  gratuityText?: string;
+  /** Extra experience-specific notes. */
+  additionalNotes?: string;
+}
+
 export interface ExperienceCancellationPolicy {
   freeCancelDays: number;
   partialRefundDaysStart: number;
@@ -130,6 +148,8 @@ export interface Experience {
   listingCardImagePosition?: string;
   gallery: string[];
   location: ExperienceLocation;
+  /** Per-experience confirmation/reminder logistics copy (arrival, rules, gratuity). */
+  confirmationEmail?: ExperienceConfirmationEmail;
   maxGuests: number;
   petsMax: number;
   included: string[];
@@ -396,6 +416,9 @@ export interface Hold {
   rollbackPending?: boolean;
   /** After this time, cron may auto-release the slot if no succeeded PaymentIntent is observed (see cleanup-holds-logic). */
   rollbackPendingExpiresAt?: FirestoreTimestamp;
+  /** Paid-click attribution from the landing URL (Google Ads gclid / UTMs). */
+  adsAttribution?: import("@/lib/ads/attribution").AdsAttribution;
+  adsChannel?: import("@/lib/ads/attribution").AdsChannel;
 }
 
 // ---------------------------------------------------------------------------
@@ -555,6 +578,8 @@ export interface Booking {
   startDateStr?: string;
   /** Revenue summary month key at booking creation (e.g. revenue_2026_03). */
   summaryMonthKey?: string;
+  /** True after global/monthly/experience revenue counters were incremented for this booking. */
+  summaryCountersApplied?: boolean;
   /** Customer notification pipeline exhausted retries or dead-lettered (ops triage / filters). */
   notificationFailed?: boolean;
   notificationFailedAt?: FirestoreTimestamp;
@@ -565,6 +590,30 @@ export interface Booking {
   discountCode?: string;
   /** Discount amount in cents (if any). */
   discountCents?: number;
+  /**
+   * Internal notes for the assigned captain / ops.
+   * `operatorNotes` is the latest entry; `operatorNotesLog` is the full timeline.
+   * Never sent to guests.
+   */
+  operatorNotes?: string;
+  operatorNotesUpdatedAt?: FirestoreTimestamp;
+  operatorNotesBy?: string;
+  operatorNotesLog?: Array<{
+    id: string;
+    text: string;
+    by: string;
+    byName?: string;
+    at: string;
+  }>;
+  /** Denormalized captain email for calendar queries. Keep in sync with assignedCaptain.email. */
+  captainEmail?: string;
+  /** Captain assigned by Super Admin or an operator. */
+  assignedCaptain?: {
+    email: string;
+    name: string;
+    assignedAt?: FirestoreTimestamp;
+    assignedBy?: string;
+  };
   /** Tip amount in cents (if any). */
   tipCents?: number;
   /** When to run final charge (bookingStartAt - 48h). */
@@ -609,6 +658,40 @@ export interface Booking {
   brevoSubscribedAt?: FirestoreTimestamp;
   /** Admin cancel: refund vs summary reconciliation (see POST /api/admin/bookings/[id]/cancel). */
   cancellationRefund?: BookingCancellationRefund;
+  /** Direct site, admin, or inbound marketplace email sync. */
+  source?: "website" | "admin" | "boatsetter" | "getmyboat" | "viator" | string;
+  /** Paid-click attribution from the landing URL (Google Ads gclid / UTMs). */
+  adsAttribution?: import("@/lib/ads/attribution").AdsAttribution;
+  adsChannel?: import("@/lib/ads/attribution").AdsChannel;
+  externalProvider?: "boatsetter" | "getmyboat" | "viator";
+  externalBookingId?: string;
+  /** `${provider}:${externalBookingId}` for idempotent marketplace lookup. */
+  externalKey?: string;
+  externalListingId?: string;
+  externalListingName?: string;
+  externalProductCode?: string;
+  externalMessageId?: string;
+  externalThreadId?: string;
+  /** Labeled fields copied from the marketplace confirmation email. */
+  marketplaceDetails?: Record<string, string>;
+  /** Booking-details excerpt from the marketplace email. */
+  marketplaceEmailExcerpt?: string;
+  /**
+   * Admin reschedule marker. `rescheduledAt` is the latest move;
+   * `rescheduleHistory` is the timeline shown on the booking.
+   */
+  rescheduledAt?: FirestoreTimestamp;
+  rescheduledFromSlotId?: string;
+  rescheduledFromStartDateStr?: string;
+  rescheduleCount?: number;
+  rescheduleHistory?: Array<{
+    fromSlotId: string;
+    toSlotId: string;
+    fromDateStr?: string;
+    toDateStr?: string;
+    at: string;
+    by?: string;
+  }>;
   createdAt: FirestoreTimestamp;
   updatedAt?: FirestoreTimestamp;
 }
@@ -664,6 +747,7 @@ export interface CreateHoldInput {
   holdRequestId?: string;
   /** Proves ownership of `resumeHoldId` when hold-request claim does not (signed `RELEASE_TOKEN_SECRET`). */
   release_token?: string;
+  adsAttribution?: import("@/lib/ads/attribution").AdsAttribution;
 }
 
 export interface CreateHoldResponse {
@@ -698,6 +782,9 @@ export interface CreateCheckoutSessionResponse {
 
 export type DiscountType = "percent" | "fixed";
 
+/** Who a promo code is connected to for conversion reporting (free-text `assignedTo`). */
+export type DiscountAssignedToType = "internal" | "partner" | "influencer" | "campaign" | "other";
+
 export interface Discount {
   /** Code customers enter (stored uppercase). */
   code: string;
@@ -715,6 +802,10 @@ export interface Discount {
   active: boolean;
   /** Optional description for admin. */
   description?: string;
+  /** Free-text owner for reporting (partner name, influencer handle, etc.). */
+  assignedTo?: string;
+  /** Category for `assignedTo` (reporting rollups). */
+  assignedToType?: DiscountAssignedToType;
   createdAt: FirestoreTimestamp;
   updatedAt?: FirestoreTimestamp;
 }

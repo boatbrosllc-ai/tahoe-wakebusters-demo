@@ -1,5 +1,10 @@
 import type { SiteConfig } from "@/config/site-types";
 import type { CustomerPlatformConfig } from "@/lib/launch/customer-platform-config.schema";
+import {
+  mergeFeatureOverrideSources,
+  normalizePlan,
+  resolveFeatureFlags,
+} from "@/lib/plan";
 
 function digitsOnlyPhone(phone: string): string {
   const digits = phone.replace(/\D/g, "");
@@ -31,9 +36,16 @@ export function mapPacketToSiteConfig(packet: CustomerPlatformConfig): SiteConfi
     packet.booking.cancellation.summary?.trim() ||
     `Free cancel until ${packet.booking.cancellation.freeCancelDays} days before · Contact us to cancel.`;
 
+  const plan = normalizePlan(packet.plan);
+  const features = resolveFeatureFlags(
+    plan,
+    mergeFeatureOverrideSources(packet.features, packet.featureOverrides),
+  );
+
   return {
     tenantId: packet.siteId,
     environment: "production",
+    plan,
 
     company: {
       name: packet.company.name,
@@ -186,12 +198,7 @@ export function mapPacketToSiteConfig(packet: CustomerPlatformConfig): SiteConfi
       ...(packet.weeklySchedule?.length ? { weeklySchedule: packet.weeklySchedule } : {}),
     },
 
-    features: {
-      googleAuth: packet.features?.googleAuth ?? true,
-      paypal: packet.features?.paypal ?? false,
-      giftCards: packet.features?.giftCards ?? false,
-      smsReminders: packet.features?.smsReminders ?? false,
-    },
+    features,
 
     phone,
     phoneTel: digitsOnlyPhone(phone),

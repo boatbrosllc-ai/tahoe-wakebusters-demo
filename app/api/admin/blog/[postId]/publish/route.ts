@@ -4,12 +4,20 @@ import { getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getBlogPostRef, writeAuditLog } from "@/lib/blog/firestore";
 import { publishBlogPostSchema, validatePublishRequirements } from "@/lib/blog/schema";
 import { buildSchemaFields } from "@/lib/blog/schema-jsonld";
+import { requireFeatureResponse } from "@/lib/plan";
 
 /** POST /api/admin/blog/[postId]/publish — publish_now | schedule | unpublish | archive */
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ postId: string }> }
+  {
+  params }: { params: Promise<{ postId: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("blogStudio");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

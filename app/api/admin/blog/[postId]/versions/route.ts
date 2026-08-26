@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession } from "@/lib/admin-auth-firebase";
 import { getBlogVersionsRef } from "@/lib/blog/firestore";
+import { requireFeatureResponse } from "@/lib/plan";
 
 function toIso(t: { seconds: number; nanoseconds: number } | null | undefined): string | null {
   if (!t || typeof t !== "object") return null;
@@ -10,8 +11,15 @@ function toIso(t: { seconds: number; nanoseconds: number } | null | undefined): 
 /** GET /api/admin/blog/[postId]/versions — list version snapshots for this post */
 export async function GET(
   _request: NextRequest,
-  { params }: { params: Promise<{ postId: string }> }
+  {
+  params }: { params: Promise<{ postId: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("blogStudio");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(_request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

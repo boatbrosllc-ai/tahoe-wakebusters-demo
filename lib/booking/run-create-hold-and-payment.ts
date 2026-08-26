@@ -6,6 +6,7 @@
  */
 
 import type { MutableRefObject } from "react";
+import { getStoredAdsAttribution } from "@/lib/ads/attribution-client";
 import { isRetryableCreateHold503Code } from "@/lib/booking/create-hold-errors";
 
 export interface CreateHoldAndPaymentParams {
@@ -180,6 +181,7 @@ function parseIncidentId(data: CreateHoldJson): string | undefined {
 }
 
 function buildCreateHoldRequestBody(params: CreateHoldAndPaymentParams): string {
+  const adsAttribution = getStoredAdsAttribution();
   return JSON.stringify({
     experienceId: params.experienceId,
     ...(params.boatId && { boatId: params.boatId }),
@@ -199,6 +201,7 @@ function buildCreateHoldRequestBody(params: CreateHoldAndPaymentParams): string 
     ...(params.resumeHoldId && params.releaseToken?.trim()
       ? { release_token: params.releaseToken.trim() }
       : {}),
+    ...(adsAttribution ? { adsAttribution } : {}),
   });
 }
 

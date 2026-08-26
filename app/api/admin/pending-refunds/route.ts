@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb } from "@/lib/booking/firebase-admin";
 import type { PendingRefund } from "@/lib/booking/types";
+import { requireFeatureResponse } from "@/lib/plan";
 
 function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
   if (ts.toDate) return ts.toDate();
@@ -10,6 +11,12 @@ function toDate(ts: { seconds?: number; toDate?: () => Date }): Date | null {
 }
 
 export async function GET(request: NextRequest) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("advancedRefunds");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

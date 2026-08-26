@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
-import { getAdminSessionVerifyOutcome } from "@/lib/admin-auth-firebase";
+import { getAdminPrincipalFromSessionCookie, getAdminSessionVerifyOutcome } from "@/lib/admin-auth-firebase";
+import { canAccessAdminPath, homePathForAdminRole } from "@/lib/admin/roles";
 import { AdminShell } from "./AdminShell";
 import { AdminVerificationUnavailable } from "./AdminVerificationUnavailable";
 
@@ -8,6 +9,7 @@ export default async function AdminDashboardLayout({ children }: { children: Rea
   try {
     const headersList = await headers();
     const cookie = headersList.get("cookie");
+    const pathname = headersList.get("x-pathname") ?? "";
     const outcome = await getAdminSessionVerifyOutcome(cookie);
     if (outcome === "unavailable") {
       return (
@@ -19,7 +21,21 @@ export default async function AdminDashboardLayout({ children }: { children: Rea
     if (outcome !== "valid") {
       redirect("/admin/login");
     }
+    const principal = await getAdminPrincipalFromSessionCookie(cookie);
+    if (!principal) {
+      redirect("/admin/login");
+    }
+    if (pathname && !canAccessAdminPath(principal.role, pathname, "GET")) {
+      redirect(homePathForAdminRole(principal.role));
+    }
+    return (
+      <AdminShell role={principal.role} displayName={principal.displayName} email={principal.email}>
+        {children}
+      </AdminShell>
+    );
   } catch (err) {
+    const digest = err && typeof err === "object" && "digest" in err ? String((err as { digest?: unknown }).digest) : "";
+    if (digest.startsWith("NEXT_REDIRECT")) throw err;
     const message = err instanceof Error ? err.message : String(err);
     const lower = message.toLowerCase();
     const isFirebaseConfig =
@@ -33,5 +49,4 @@ export default async function AdminDashboardLayout({ children }: { children: Rea
     }
     redirect("/admin/login");
   }
-  return <AdminShell>{children}</AdminShell>;
 }

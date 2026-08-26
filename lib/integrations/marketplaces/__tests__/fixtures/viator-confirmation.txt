@@ -1,0 +1,50 @@
+New Booking for Sat, Aug 15, 2026 (#BR-1437096751)
+
+Booking Confirmation
+
+You have a new reservation for Lake Austin Sunset Boat Ride.
+
+Booking Details
+
+Booking Reference: BR-1437096751
+
+Tour Name:
+Lake Austin Sunset Boat Ride
+
+Travel Date:
+Sat, Aug 15, 2026
+
+Lead Traveler Name:
+Lead Traveler
+
+Traveler Names:
+Lead Traveler, Guest Two
+
+Travelers:
+2 Adults
+
+Product Code:
+5610231P1
+
+Tour Grade:
+Lake Austin Sunset Boat Ride 19:30
+
+Tour Grade Code:
+TG1~19:30
+
+Tour Grade Description:
+Lake Austin Sunset Boat Ride
+
+Tour Language:
+English - Guide
+
+Location:
+Austin, United States
+
+Meeting Point:
+5019 TX-360 Loop, Austin, TX 78746, USA
+
+Net Rate: USD $81.90
+Meeting Point: 5019 TX-360 Loop, Austin, TX 78746, USA
+Special Requirements: No
+Phone: (Alternate Phone)US+1 5550100123 Send the customer a message.

@@ -1,35 +1,35 @@
 import { brand } from "@/content/brand";
 import { siteConfig } from "@/config/site";
 import { DEFAULT_CANCELLATION_POLICY } from "@/lib/booking/cancellation-policy";
+
 /**
- * Launch fleet — single placeholder boat for the master template.
- * Seeded into Firestore via POST /api/admin/seed.
- *
- * Replace name/slug/photos from a launch packet. Keep `slug` stable after go-live
- * so re-seed updates the existing boat doc.
+ * Flagship boat for seed — 30' Double Decker Party Barge.
  */
 
 export const LAUNCH_BOAT = {
-  name: "Charter Boat",
-  slug: "charter-boat",
+  name: "30′ Double Decker Party Barge",
+  slug: "party-barge",
   previousNames: [] as const,
-  previousSlugs: [] as const,
+  previousSlugs: ["charter-boat"] as const,
   year: 2020,
-  model: "Charter",
+  model: "Double Decker Party Barge",
   make: "Custom",
-  heroSubtitle: "Captain & crew included",
-  capacity: 6,
+  heroSubtitle: "Dual slides · Grill · Up to 13 · Gas included",
+  capacity: 13,
   timezone: brand.timezone,
-  capacityMax: 6,
-  petsMax: 0,
+  capacityMax: 13,
+  petsMax: 2,
   defaultLocationText: siteConfig.contact.marinaMeetNote,
   cancellationPolicyText: DEFAULT_CANCELLATION_POLICY,
-  photos: [siteConfig.media.listingFallback] as string[],
+  photos: [
+    "/photos/wakebusters/party-barge.jpg",
+    "/photos/wakebusters/hero-slides.jpg",
+    "/photos/wakebusters/party-crew.jpg",
+  ] as string[],
   description: [
-    `The charter boat is ${brand.companyName}'s primary vessel — captain and crew included on every trip.`,
-    "Book Half Day or Full Day and we'll confirm dock details after you reserve.",
+    "The ultimate Tahoe party boat. Dual waterslides, a full propane grill, water toys, and room for the whole crew.",
+    "Full tank of gas and safety gear included. Captain required — fees paid separately to your USCG-certified captain.",
   ].join("\n\n"),
 } as const;
 
-/** Public path for the flagship boat — used while we only list one vessel. */
 export const OUR_BOAT_PATH = `/boats/${LAUNCH_BOAT.slug}` as const;

@@ -4,9 +4,16 @@ import { getBlogPostsRef, getBlogPostRef, buildNewPostDoc, toSerializedPost, wri
 import { createBlogPostSchema } from "@/lib/blog/schema";
 import { contentBlocksToText } from "@/lib/blog/content-stats";
 import { blogPosts } from "@/content/blog";
+import { requireFeatureResponse } from "@/lib/plan";
 
 /** GET /api/admin/blog — list posts with optional search, status, sort. Includes static "The Dock" posts from content/blog so Blog Studio shows all current articles. */
 export async function GET(request: NextRequest) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("blogStudio");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 
@@ -88,6 +95,12 @@ function stripUndefinedDeep(value: unknown): unknown {
 
 /** POST /api/admin/blog — create a new draft post. */
 export async function POST(request: NextRequest) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("blogStudio");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

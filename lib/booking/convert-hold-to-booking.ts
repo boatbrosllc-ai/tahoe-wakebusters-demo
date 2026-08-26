@@ -15,6 +15,7 @@ import {
   createWaiverRequestAndTokenInTransaction,
   createGroupTokenInTransaction,
 } from "@/lib/waiver/firestore";
+import { hasFeature } from "@/lib/plan";
 import {
   buildAddonSelectionsForPricing,
   computePricing,
@@ -333,7 +334,7 @@ export async function convertHoldToBooking(
         }
       }
       if (bookingForSideEffects && recoveryBookingId) {
-        if (!bookingForSideEffects.waiver) {
+        if (hasFeature("waivers") && !bookingForSideEffects.waiver) {
           const cust = bookingForSideEffects.customer;
           const waiverResult = await createWaiverForBooking({
             bookingId: recoveryBookingId,
@@ -829,6 +830,12 @@ export async function convertHoldToBooking(
     stripe: stripeBlockForBooking,
     ...(holdDiscountCode && holdDiscountCents > 0 ? { discountCode: holdDiscountCode, discountCents: holdDiscountCents } : {}),
     ...(holdTipCents > 0 ? { tipCents: holdTipCents } : {}),
+    ...(hold.adsAttribution
+      ? {
+          adsAttribution: hold.adsAttribution,
+          adsChannel: hold.adsChannel ?? hold.adsAttribution.channel,
+        }
+      : {}),
     ...(isDeposit && scheduleAutoFinalCharge ? { finalChargeAt: finalChargeAtTimestamp as unknown as FirestoreTimestamp } : {}),
     ...(isDeposit && input.stripe.card ? { card: input.stripe.card } : {}),
     createdAt: Timestamp.now() as unknown as FirestoreTimestamp,
@@ -856,9 +863,9 @@ export async function convertHoldToBooking(
   /** Sentinel thrown when transactional hold PI ids/version no longer match this conversion PI. */
   const HOLD_PI_MATCH_FAILED_SENTINEL = new Error("HOLD_PI_MATCH_FAILED");
 
-  const waiverTemplates = await listTemplates();
+  const waiverTemplates = hasFeature("waivers") ? await listTemplates() : [];
   const activeWaiverTemplate = waiverTemplates.find((t) => t.isActive);
-  if (!activeWaiverTemplate && customer.email?.trim()) {
+  if (hasFeature("waivers") && !activeWaiverTemplate && customer.email?.trim()) {
     const tripDate = booking.startDateStr ?? "";
     void sendWaiverTemplateMissingAlert(
       bookingId,

@@ -1,12 +1,13 @@
 import type { CSSProperties } from "react";
 import type { Metadata, Viewport } from "next";
-import { Syne } from "next/font/google";
+import { Roboto_Slab, Montserrat } from "next/font/google";
 import { headers } from "next/headers";
 import { getGaMeasurementId, isGaClientDebugEnabled } from "@/lib/ga-measurement-id";
 import { getGoogleAdsId } from "@/lib/google-ads-id";
 import { getGtagInlineBootstrapJs } from "@/lib/ga-gtag-inline";
 import { isStripeCheckoutReady } from "@/lib/booking/stripe-publishable";
 import { GaPageViewTracker } from "@/components/providers/GaPageViewTracker";
+import { AdsAttributionCapture } from "@/components/providers/AdsAttributionCapture";
 import "./globals.css";
 import { getSiteBaseUrl, siteConfig, siteThemeCssVars } from "@/config/site";
 
@@ -14,14 +15,21 @@ import { getSiteBaseUrl, siteConfig, siteThemeCssVars } from "@/config/site";
 /** Must match `RELEASE_TRAIN` in `@stripe/stripe-js` so `loadStripe()` reuses this tag (CSP + strict-dynamic). */
 const STRIPE_JS_SRC = "https://js.stripe.com/clover/stripe.js";
 
-const syne = Syne({
+/** Display: Roboto Slab. Body/UI: Montserrat. */
+const robotoSlab = Roboto_Slab({
   subsets: ["latin"],
   display: "swap",
   variable: "--font-display",
   preload: true,
 });
 
-const displayFont = syne;
+const montserrat = Montserrat({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-sans",
+  weight: ["400", "500", "600", "700", "800"],
+  preload: true,
+});
 
 let didLogGaSkip = false;
 
@@ -73,10 +81,10 @@ export default async function RootLayout({
   return (
     <html
       lang="en"
-      className={displayFont.variable}
+      className={`${robotoSlab.variable} ${montserrat.variable}`}
       style={siteThemeCssVars() as CSSProperties}
     >
-      <body>
+      <body className="font-sans">
         {/* Stripe.js: loaded early in layout; CSP nonce + strict-dynamic. */}
         {isStripeCheckoutReady ? (
           <script src={STRIPE_JS_SRC} async nonce={nonce} suppressHydrationWarning />
@@ -105,6 +113,7 @@ export default async function RootLayout({
           </>
         ) : null}
         <GaPageViewTracker />
+        <AdsAttributionCapture />
         {children}
       </body>
     </html>

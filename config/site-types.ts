@@ -5,10 +5,20 @@
  * a multi-site registry or `SITE_IDS` switcher.
  */
 
+import type { FeatureFlags, PlanId } from "@/lib/plan/types";
+
+export type { FeatureFlags, FeatureKey, PlanId } from "@/lib/plan/types";
+
 export type SiteConfig = {
   /** Stable id for this customer deployment (launch packet / ops). Not a site switcher. */
   tenantId: string;
   environment: "development" | "staging" | "production";
+
+  /**
+   * Slipstack commercial plan for this fork.
+   * Missing/`undefined` is treated as `"full"` for legacy customer repos.
+   */
+  plan?: PlanId;
 
   company: {
     name: string;
@@ -189,12 +199,12 @@ export type SiteConfig = {
     }>;
   };
 
-  features: {
-    googleAuth: boolean;
-    paypal: boolean;
-    giftCards: boolean;
-    smsReminders: boolean;
-  };
+  /**
+   * Resolved feature flags for this deployment (plan defaults + overrides).
+   * Prefer `hasFeature("waivers")` from `@/lib/plan` over reading this map directly
+   * when gating product behavior — it falls back safely for legacy configs.
+   */
+  features: FeatureFlags;
 
   phone: string;
   phoneTel: string;

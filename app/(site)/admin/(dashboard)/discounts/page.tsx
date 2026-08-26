@@ -4,6 +4,11 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import {
+  DISCOUNT_ASSIGNED_TO_TYPES,
+  DISCOUNT_ASSIGNED_TO_TYPE_LABELS,
+} from "@/lib/booking/discount-assignment";
+import type { DiscountAssignedToType } from "@/lib/booking/types";
 
 type DiscountItem = {
   id: string;
@@ -16,6 +21,8 @@ type DiscountItem = {
   usedCount: number;
   active: boolean;
   description?: string;
+  assignedTo?: string;
+  assignedToType?: DiscountAssignedToType;
   createdAt: string | null;
 };
 
@@ -31,9 +38,16 @@ export default function AdminDiscountsPage() {
   const [createExpiresAt, setCreateExpiresAt] = useState("");
   const [createMaxRedemptions, setCreateMaxRedemptions] = useState("");
   const [createDescription, setCreateDescription] = useState("");
+  const [createAssignedTo, setCreateAssignedTo] = useState("");
+  const [createAssignedToType, setCreateAssignedToType] = useState<DiscountAssignedToType | "">("");
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editAssignedTo, setEditAssignedTo] = useState("");
+  const [editAssignedToType, setEditAssignedToType] = useState<DiscountAssignedToType | "">("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editLoading, setEditLoading] = useState(false);
 
   const fetchList = () => {
     setLoading(true);
@@ -69,6 +83,8 @@ export default function AdminDiscountsPage() {
           expiresAt: createExpiresAt.trim() || undefined,
           maxRedemptions: createMaxRedemptions.trim() ? parseInt(createMaxRedemptions, 10) : undefined,
           description: createDescription.trim() || undefined,
+          assignedTo: createAssignedTo.trim() || undefined,
+          assignedToType: createAssignedToType || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -80,6 +96,8 @@ export default function AdminDiscountsPage() {
       setCreateExpiresAt("");
       setCreateMaxRedemptions("");
       setCreateDescription("");
+      setCreateAssignedTo("");
+      setCreateAssignedToType("");
       fetchList();
     } catch (e) {
       setCreateError(e instanceof Error ? e.message : "Failed to create");
@@ -108,6 +126,38 @@ export default function AdminDiscountsPage() {
     }
   };
 
+  const startEdit = (d: DiscountItem) => {
+    setEditingId(d.id);
+    setEditAssignedTo(d.assignedTo ?? "");
+    setEditAssignedToType(d.assignedToType ?? "");
+    setEditDescription(d.description ?? "");
+  };
+
+  const saveEdit = async (id: string) => {
+    setEditLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/admin/discounts/${id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          assignedTo: editAssignedTo.trim() || null,
+          assignedToType: editAssignedToType || null,
+          description: editDescription.trim() || null,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Failed to update");
+      setEditingId(null);
+      fetchList();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update");
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
   function formatDate(iso: string | null) {
     if (!iso) return "—";
     return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -123,7 +173,11 @@ export default function AdminDiscountsPage() {
         <div>
           <h1 className="text-2xl font-bold text-brand-dark sm:text-3xl">Discount codes</h1>
           <p className="mt-1 text-sm text-brand-muted">
-            Create codes to share with customers. They enter the code at checkout and the discount is applied.
+            Create codes to share with customers. Assign an owner so{" "}
+            <Link href="/admin/financials" className="text-brand-primary hover:underline">
+              Financials
+            </Link>{" "}
+            can measure who is driving conversions.
           </p>
         </div>
         <Button onClick={() => setCreateOpen((o) => !o)} className="shrink-0 w-full sm:w-auto">
@@ -213,6 +267,33 @@ export default function AdminDiscountsPage() {
               />
             </label>
           </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-sm font-medium text-brand-dark">Connected to (optional)</span>
+              <input
+                type="text"
+                value={createAssignedTo}
+                onChange={(e) => setCreateAssignedTo(e.target.value)}
+                placeholder="e.g. Hotel X, Sarah, Spring email"
+                className="rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-sm font-medium text-brand-dark">Owner type</span>
+              <select
+                value={createAssignedToType}
+                onChange={(e) => setCreateAssignedToType((e.target.value || "") as DiscountAssignedToType | "")}
+                className="rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark"
+              >
+                <option value="">Not set</option>
+                {DISCOUNT_ASSIGNED_TO_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {DISCOUNT_ASSIGNED_TO_TYPE_LABELS[t]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <label className="flex flex-col gap-1">
             <span className="text-sm font-medium text-brand-dark">Description (optional, admin only)</span>
             <input
@@ -234,6 +315,64 @@ export default function AdminDiscountsPage() {
         </form>
       )}
 
+      {editingId && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void saveEdit(editingId);
+          }}
+          className="rounded-2xl border border-brand-dark/10 bg-white shadow-soft p-4 sm:p-6 space-y-4"
+        >
+          <h2 className="text-lg font-semibold text-brand-dark">
+            Edit {list.find((d) => d.id === editingId)?.code ?? "code"}
+          </h2>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-sm font-medium text-brand-dark">Connected to</span>
+              <input
+                type="text"
+                value={editAssignedTo}
+                onChange={(e) => setEditAssignedTo(e.target.value)}
+                placeholder="Person, partner, or campaign"
+                className="rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-sm font-medium text-brand-dark">Owner type</span>
+              <select
+                value={editAssignedToType}
+                onChange={(e) => setEditAssignedToType((e.target.value || "") as DiscountAssignedToType | "")}
+                className="rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark"
+              >
+                <option value="">Not set</option>
+                {DISCOUNT_ASSIGNED_TO_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {DISCOUNT_ASSIGNED_TO_TYPE_LABELS[t]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label className="flex flex-col gap-1">
+            <span className="text-sm font-medium text-brand-dark">Description</span>
+            <input
+              type="text"
+              value={editDescription}
+              onChange={(e) => setEditDescription(e.target.value)}
+              className="rounded-lg border border-brand-dark/20 px-3 py-2 text-sm text-brand-dark"
+            />
+          </label>
+          <div className="flex gap-2">
+            <Button type="submit" disabled={editLoading}>
+              {editLoading ? "Saving…" : "Save"}
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setEditingId(null)}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      )}
+
       <div className="rounded-2xl bg-white shadow-soft border border-brand-dark/10 overflow-hidden">
         {loading && <div className="p-6 sm:p-8 text-center text-brand-muted text-sm">Loading…</div>}
         {!loading && list.length === 0 && (
@@ -249,6 +388,7 @@ export default function AdminDiscountsPage() {
                 <thead>
                   <tr className="border-b border-brand-dark/10 bg-brand-bg/50">
                     <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Code</th>
+                    <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Connected to</th>
                     <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Type</th>
                     <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Value</th>
                     <th className="px-3 py-3 sm:px-4 sm:py-4 text-left font-medium text-brand-dark">Used</th>
@@ -261,6 +401,20 @@ export default function AdminDiscountsPage() {
                   {list.map((d) => (
                     <tr key={d.id} className="border-b border-brand-dark/5 hover:bg-brand-bg/30">
                       <td className="px-3 py-3 sm:px-4 sm:py-4 font-mono font-semibold text-brand-dark">{d.code}</td>
+                      <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
+                        {d.assignedTo ? (
+                          <span>
+                            {d.assignedTo}
+                            {d.assignedToType ? (
+                              <span className="block text-xs text-brand-muted">
+                                {DISCOUNT_ASSIGNED_TO_TYPE_LABELS[d.assignedToType]}
+                              </span>
+                            ) : null}
+                          </span>
+                        ) : (
+                          <span className="text-brand-muted">Unassigned</span>
+                        )}
+                      </td>
                       <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark capitalize">{d.type}</td>
                       <td className="px-3 py-3 sm:px-4 sm:py-4 text-brand-dark">
                         {d.type === "percent" ? `${d.percent ?? 0}%` : formatCents(d.valueCents ?? 0)}
@@ -281,14 +435,19 @@ export default function AdminDiscountsPage() {
                         </span>
                       </td>
                       <td className="px-3 py-3 sm:px-4 sm:py-4 text-right">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => toggleActive(d.id, d.active)}
-                          disabled={togglingId === d.id}
-                        >
-                          {togglingId === d.id ? "…" : d.active ? "Deactivate" : "Activate"}
-                        </Button>
+                        <div className="flex justify-end gap-2">
+                          <Button variant="outline" size="sm" onClick={() => startEdit(d)}>
+                            Edit
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => toggleActive(d.id, d.active)}
+                            disabled={togglingId === d.id}
+                          >
+                            {togglingId === d.id ? "…" : d.active ? "Deactivate" : "Activate"}
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -313,16 +472,26 @@ export default function AdminDiscountsPage() {
                   <div className="text-xs text-brand-muted space-y-0.5">
                     <p className="capitalize">{d.type} · {d.type === "percent" ? `${d.percent ?? 0}% off` : formatCents(d.valueCents ?? 0) + " off"}</p>
                     <p>Used: {d.usedCount}{d.maxRedemptions != null ? ` / ${d.maxRedemptions}` : ""} · Expires: {formatDate(d.expiresAt)}</p>
+                    <p>
+                      {d.assignedTo
+                        ? `${d.assignedTo}${d.assignedToType ? ` · ${DISCOUNT_ASSIGNED_TO_TYPE_LABELS[d.assignedToType]}` : ""}`
+                        : "Unassigned"}
+                    </p>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => toggleActive(d.id, d.active)}
-                    disabled={togglingId === d.id}
-                    className="w-full min-h-[40px]"
-                  >
-                    {togglingId === d.id ? "…" : d.active ? "Deactivate" : "Activate"}
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => startEdit(d)} className="flex-1 min-h-[40px]">
+                      Edit
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => toggleActive(d.id, d.active)}
+                      disabled={togglingId === d.id}
+                      className="flex-1 min-h-[40px]"
+                    >
+                      {togglingId === d.id ? "…" : d.active ? "Deactivate" : "Activate"}
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>

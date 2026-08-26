@@ -7,7 +7,7 @@ const HOMEPAGE_SEO_LINKS: { href: string; label: string }[] = [
   { href: "/experiences/half-day", label: siteConfig.catalog.halfDay.title },
   { href: "/experiences/full-day", label: siteConfig.catalog.fullDay.title },
   { href: "/packages", label: "Packages" },
-  { href: OUR_BOAT_PATH, label: "Our boat" },
+  { href: OUR_BOAT_PATH, label: siteConfig.nav.boatLabel || "Our Fleet" },
   { href: "/faqs", label: "FAQs" },
   { href: "/contact", label: "Contact" },
 ];

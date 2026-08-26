@@ -5,6 +5,7 @@
  */
 
 import { brand } from "@/content/brand";
+import { hasFeature } from "@/lib/plan";
 import { bookingEnv } from "./env";
 import { validatePhone } from "./validate-phone";
 import { logNotificationSent, type NotificationEventSubtype } from "./email-log";
@@ -29,7 +30,7 @@ function toE164(phone: string): string | null {
 }
 
 export function isSmsEnabled(): boolean {
-  return bookingEnv.smsEnabled;
+  return hasFeature("smsReminders") && bookingEnv.smsEnabled;
 }
 
 const TWILIO_FETCH_TIMEOUT_MS = 8000;

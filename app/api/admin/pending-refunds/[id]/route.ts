@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdminSession, FIREBASE_SETUP_HINT } from "@/lib/admin-auth-firebase";
 import { getDb, getFirestoreExports } from "@/lib/booking/firebase-admin";
 import { getStripe } from "@/lib/booking/stripe-client";
+import { requireFeatureResponse } from "@/lib/plan";
 
 function parsePatchBody(
   body: unknown
@@ -26,7 +27,14 @@ function parsePatchBody(
   };
 }
 
-export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function PATCH(request: NextRequest, {
+  params }: { params: Promise<{ id: string }> }) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("advancedRefunds");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

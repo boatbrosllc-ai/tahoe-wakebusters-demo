@@ -9,8 +9,16 @@ import { getDb } from "@/lib/booking/firebase-admin";
 import { createWaiverForBooking, sendWaiverInviteAndMarkSent } from "@/lib/waiver/on-booking-created";
 import type { Booking } from "@/lib/booking/types";
 import { writeAdminAuditLog } from "@/lib/booking/admin-audit-log";
+import { requireFeatureResponse } from "@/lib/plan";
 
-export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(request: NextRequest, {
+  params }: { params: Promise<{ id: string }> }) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

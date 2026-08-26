@@ -2,25 +2,36 @@
  * Admin auth via Firebase Auth session cookie.
  * Client signs in with Firebase (email/password), sends ID token to /api/admin/session;
  * server creates a session cookie and verifies it on protected routes.
- * Allowed emails are read exclusively from ADMIN_EMAIL (comma-separated).
+ *
+ * Super Admin is the first address in ADMIN_EMAIL (or PLATFORM_ADMIN_EMAIL).
+ * Operators and captains are invited via Firestore `adminTeam` — they are not granted
+ * access merely by appearing in ADMIN_EMAIL.
  */
 
 import "server-only";
+import { cache } from "react";
 import { extractAdminSessionCookieValue } from "./admin-cookie-parse";
 import { ADMIN_AUTH_VERIFICATION_UNAVAILABLE, ADMIN_SESSION_COOKIE_NAME } from "@/lib/admin-auth-constants";
-import { getFirebaseApp } from "@/lib/booking/firebase-admin"; // same app used for Firestore
+import { getFirebaseApp } from "@/lib/booking/firebase-admin";
 import { safeHasFirebaseConfig, getFirebaseConfigStatus } from "@/lib/booking/env";
+import {
+  getSuperAdminDisplayName,
+  canAccessAdminPath,
+  isSuperAdminEmail,
+  normalizeAdminEmail,
+  type AdminPrincipal,
+} from "@/lib/admin/roles";
+import { getActiveTeamMember } from "@/lib/admin/team-store";
 
 export { ADMIN_AUTH_VERIFICATION_UNAVAILABLE };
 
 const COOKIE_NAME = ADMIN_SESSION_COOKIE_NAME;
-const SESSION_EXPIRES_MS = 5 * 24 * 60 * 60 * 1000; // 5 days (Firebase max 2 weeks)
+const SESSION_EXPIRES_MS = 5 * 24 * 60 * 60 * 1000;
 
-/** Shown when Firebase/Firestore server config is missing or invalid (503/500). */
 export const FIREBASE_SETUP_HINT =
   "Set FIREBASE_SERVICE_ACCOUNT_JSON_PATH to your service account JSON path (Firebase Console → Project settings → Service accounts → Generate new private key), or set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY. Restart the dev server.";
 
-/** All emails that are allowed to access admin, read exclusively from ADMIN_EMAIL (comma-separated). Exported for session route. */
+/** ADMIN_EMAIL must be set so admin is considered configured. Only the first email is Super Admin; teammates use Team invites. */
 export function getAllowedAdminEmails(): string[] {
   const raw = process.env.ADMIN_EMAIL?.trim() || process.env.PLATFORM_ADMIN_EMAIL?.trim();
   if (!raw) return [];
@@ -30,15 +41,46 @@ export function getAllowedAdminEmails(): string[] {
     .filter(Boolean);
 }
 
-/** Create a Firebase session cookie from an ID token. Returns cookie value or throws. */
+async function resolveAdminPrincipalUncached(email: string): Promise<AdminPrincipal | null> {
+  const normalized = normalizeAdminEmail(email);
+  if (!normalized) return null;
+  if (isSuperAdminEmail(normalized)) {
+    return { email: normalized, role: "super_admin", displayName: getSuperAdminDisplayName() };
+  }
+  try {
+    const member = await getActiveTeamMember(normalized);
+    if (!member) return null;
+    return { email: normalized, role: member.role, displayName: member.name };
+  } catch (err) {
+    console.warn("[admin auth] team lookup failed", err);
+    return null;
+  }
+}
+
+export const resolveAdminPrincipal = cache(resolveAdminPrincipalUncached);
+
+export async function emailMaySignInToAdmin(email: string | null | undefined): Promise<boolean> {
+  return (await resolveAdminPrincipal(normalizeAdminEmail(email))) != null;
+}
+
+async function readRequestPathAndMethod(): Promise<{ pathname: string; method: string }> {
+  try {
+    const { headers } = await import("next/headers");
+    const h = await headers();
+    return {
+      pathname: (h.get("x-pathname") ?? "").trim(),
+      method: (h.get("x-method") ?? "GET").trim() || "GET",
+    };
+  } catch {
+    return { pathname: "", method: "GET" };
+  }
+}
+
 export async function createAdminSessionCookie(idToken: string): Promise<string> {
   const app = getFirebaseApp();
   return app.auth().createSessionCookie(idToken, { expiresIn: SESSION_EXPIRES_MS });
 }
 
-/** Extract the admin_session cookie value from a Cookie header.
- * Uses a regex that requires the name at start or after "; " so "xadmin_session=..." is not matched.
- * Exported for unit tests. */
 export { extractAdminSessionCookieValue } from "./admin-cookie-parse";
 
 const INVALID_SESSION_FIREBASE_CODES = new Set([
@@ -63,7 +105,6 @@ function firebaseAuthErrorCode(err: unknown): string {
   return (o.code ?? o.errorInfo?.code ?? "").trim();
 }
 
-/** True when verification failed due to backend/network issues, not an invalid or revoked session. */
 export function isFirebaseAuthOperationalVerificationFailure(err: unknown): boolean {
   const code = firebaseAuthErrorCode(err);
   if (code && OPERATIONAL_FIREBASE_AUTH_CODES.has(code)) return true;
@@ -78,10 +119,6 @@ export function isFirebaseAuthOperationalVerificationFailure(err: unknown): bool
 
 export type AdminSessionVerifyOutcome = "valid" | "invalid" | "unavailable";
 
-/**
- * Verify admin session cookie with explicit outcome: invalid/revoked vs operational failure.
- * Does not throw; use for GET /api/admin/session and admin layout.
- */
 export async function getAdminSessionVerifyOutcome(cookieHeader: string | null): Promise<AdminSessionVerifyOutcome> {
   const allowed = getAllowedAdminEmails();
   if (allowed.length === 0) return "invalid";
@@ -92,7 +129,7 @@ export async function getAdminSessionVerifyOutcome(cookieHeader: string | null):
     const app = getFirebaseApp();
     const decoded = await app.auth().verifySessionCookie(sessionCookie, true);
     const email = decoded.email?.trim().toLowerCase();
-    if (!email || !allowed.includes(email)) return "invalid";
+    if (!email || !(await emailMaySignInToAdmin(email))) return "invalid";
     return "valid";
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -104,7 +141,6 @@ export async function getAdminSessionVerifyOutcome(cookieHeader: string | null):
   }
 }
 
-/** Verify the admin session cookie and that the user is an allowed admin email. Returns true if valid. */
 export async function verifyAdminSessionCookie(cookieHeader: string | null): Promise<boolean> {
   return (await getAdminSessionVerifyOutcome(cookieHeader)) === "valid";
 }
@@ -122,11 +158,16 @@ export async function getAdminEmailFromSessionCookie(cookieHeader: string | null
   }
 }
 
+export async function getAdminPrincipalFromSessionCookie(cookieHeader: string | null): Promise<AdminPrincipal | null> {
+  const email = await getAdminEmailFromSessionCookie(cookieHeader);
+  if (!email) return null;
+  return resolveAdminPrincipal(email);
+}
+
 export function getAdminSessionCookieName(): string {
   return COOKIE_NAME;
 }
 
-/** For API routes: require valid Firebase admin session. Returns null if allowed, or a Response (401/503). */
 export async function requireAdminSession(cookieHeader: string | null): Promise<Response | null> {
   if (getAllowedAdminEmails().length === 0) {
     return new Response(JSON.stringify({ error: "Admin not configured (set ADMIN_EMAIL)" }), {
@@ -151,7 +192,26 @@ export async function requireAdminSession(cookieHeader: string | null): Promise<
     );
   }
   const outcome = await getAdminSessionVerifyOutcome(cookieHeader);
-  if (outcome === "valid") return null;
+  if (outcome === "valid") {
+    const principal = await getAdminPrincipalFromSessionCookie(cookieHeader);
+    if (!principal) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    const { pathname, method } = await readRequestPathAndMethod();
+    if (pathname && !canAccessAdminPath(principal.role, pathname, method)) {
+      return new Response(
+        JSON.stringify({
+          error: "Forbidden",
+          hint: "Your role cannot access this area.",
+        }),
+        { status: 403, headers: { "Content-Type": "application/json" } }
+      );
+    }
+    return null;
+  }
   if (outcome === "unavailable") {
     return new Response(
       JSON.stringify({
@@ -165,9 +225,9 @@ export async function requireAdminSession(cookieHeader: string | null): Promise<
   const hasCookie = !!extractAdminSessionCookieValue(cookieHeader);
   const hint = hasCookie
     ? "Session expired or invalid. Sign in again at /admin/login. In dev, check the server console for [admin auth]."
-    : "No session cookie. Sign in at /admin/login with the email set in ADMIN_EMAIL.";
-  return new Response(
-    JSON.stringify({ error: "Unauthorized", hint }),
-    { status: 401, headers: { "Content-Type": "application/json" } }
-  );
+    : "No session cookie. Sign in at /admin/login.";
+  return new Response(JSON.stringify({ error: "Unauthorized", hint }), {
+    status: 401,
+    headers: { "Content-Type": "application/json" },
+  });
 }

@@ -41,11 +41,14 @@ export function getPublicPhone(): PublicPhone | null {
   return { display: display || tel, tel };
 }
 
-/** City / region / country only — not a fabricated street NAP. */
+/** City / region for UI — omit country when it's US so labels read "South Lake Tahoe, CA". */
 export function getPublicAreaLabel(): string {
   const city = brand.address.city?.trim() || "";
   const state = brand.address.state?.trim() || "";
   const country = brand.address.country?.trim() || "";
+  if (!country || country === "US" || country === "USA") {
+    return [city, state].filter(Boolean).join(", ");
+  }
   return [city, state, country].filter(Boolean).join(", ");
 }
 
@@ -141,8 +144,9 @@ export function buildLocalBusinessJsonLd(input: LocalBusinessJsonLdInput): Recor
       "@type": "OfferCatalog",
       name: `${brand.companyName} trips`,
       itemListElement: [
-        { "@type": "Offer", itemOffered: { "@type": "Service", name: "Half Day charter" } },
-        { "@type": "Offer", itemOffered: { "@type": "Service", name: "Full Day charter" } },
+        { "@type": "Offer", itemOffered: { "@type": "Service", name: brand.catalog.halfDay.title } },
+        { "@type": "Offer", itemOffered: { "@type": "Service", name: brand.catalog.fullDay.title } },
+        { "@type": "Offer", itemOffered: { "@type": "Service", name: brand.catalog.allIn.title } },
       ],
     },
   };

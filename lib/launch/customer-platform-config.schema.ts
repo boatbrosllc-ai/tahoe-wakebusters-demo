@@ -304,8 +304,39 @@ export const customerPlatformConfigSchema = z
         paypal: z.boolean().optional(),
         giftCards: z.boolean().optional(),
         smsReminders: z.boolean().optional(),
+        waivers: z.boolean().optional(),
+        discounts: z.boolean().optional(),
+        blogStudio: z.boolean().optional(),
+        packages: z.boolean().optional(),
+        pricingCalendar: z.boolean().optional(),
+        financials: z.boolean().optional(),
+        advancedRefunds: z.boolean().optional(),
       })
       .optional(),
+    /**
+     * Explicit per-feature overrides (add-ons). Wins over `features` and plan defaults
+     * when resolving `siteConfig.features`.
+     */
+    featureOverrides: z
+      .object({
+        googleAuth: z.boolean().optional(),
+        paypal: z.boolean().optional(),
+        giftCards: z.boolean().optional(),
+        smsReminders: z.boolean().optional(),
+        waivers: z.boolean().optional(),
+        discounts: z.boolean().optional(),
+        blogStudio: z.boolean().optional(),
+        packages: z.boolean().optional(),
+        pricingCalendar: z.boolean().optional(),
+        financials: z.boolean().optional(),
+        advancedRefunds: z.boolean().optional(),
+      })
+      .optional(),
+    /**
+     * Commercial plan for this customer fork. Omitted → treated as `"full"` (legacy-safe).
+     * Slipstack.io should always send `lite` or `full` for new provisions.
+     */
+    plan: z.enum(["lite", "full"]).optional(),
   })
   .superRefine((packet, ctx) => {
     const slugSet = new Set<string>();
@@ -385,6 +416,11 @@ export function validateLaunchPacket(input: unknown): LaunchPacketValidationResu
   }
   if (/^example\.com$/i.test(parsed.data.domain.trim())) {
     warnings.push("domain is example.com — replace before production deploy.");
+  }
+  if (parsed.data.plan === "lite" && parsed.data.waiver) {
+    warnings.push(
+      "plan is lite but packet includes waiver settings — waiver template will not be seeded until the customer upgrades to full (or waivers is enabled via featureOverrides).",
+    );
   }
 
   return { ok: true, config: parsed.data, warnings };

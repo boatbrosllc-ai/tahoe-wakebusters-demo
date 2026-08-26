@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { analytics } from "@/lib/analytics";
+import { getStoredAdsAttribution } from "@/lib/ads/attribution-client";
 import { cn } from "@/lib/utils";
 
 export function ContactForm() {
@@ -19,7 +20,12 @@ export function ContactForm() {
     const res = await fetch("/api/contact", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: n.trim(), email: em.trim(), message: msg.trim() }),
+      body: JSON.stringify({
+        name: n.trim(),
+        email: em.trim(),
+        message: msg.trim(),
+        adsAttribution: getStoredAdsAttribution(),
+      }),
     });
     if (!res.ok) {
       if (res.status === 429) {

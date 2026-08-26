@@ -42,6 +42,13 @@ next-env.d.ts
 build-out*.txt
 build-full.txt
 tmp-*.json
+.tmp-verify/
+build-final-clean.txt
+build-preindex.txt
+
 
 # Standalone server (do not commit; use next build → .next/standalone/server.js if needed)
 server.js
+
+# Local Netlify folder
+.netlify

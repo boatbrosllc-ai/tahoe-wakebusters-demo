@@ -616,6 +616,7 @@ async function deliverClaimedConfirmationEntry(
     const { DEFAULT_CANCELLATION_POLICY } = await import("./cancellation-policy");
     const { signReceiptToken } = await import("./receiptToken");
     const { bookingEnv } = await import("./env");
+    const { emailFieldsFromExperience } = await import("./experience-email-logistics");
     type Booking = import("./types").Booking;
     type Experience = import("./types").Experience;
 
@@ -738,6 +739,7 @@ async function deliverClaimedConfirmationEntry(
     let locationText = "We'll send exact meeting point after booking.";
     let cancellationPolicyText = DEFAULT_CANCELLATION_POLICY;
     let experienceName = "Your trip";
+    let logistics: import("./experience-email-logistics").ExperienceEmailLogistics | undefined;
 
     let pricingType: "charter" | "ticketed" | undefined;
     if (booking.experienceId) {
@@ -748,7 +750,9 @@ async function deliverClaimedConfirmationEntry(
           (typeof booking.experienceTitle === "string" && booking.experienceTitle.trim()) ||
           exp.title ||
           experienceName;
-        locationText = exp.location?.addressText ?? locationText;
+        const fields = emailFieldsFromExperience(exp);
+        locationText = fields.locationText;
+        logistics = fields.logistics;
         cancellationPolicyText = exp.cancellationPolicy?.fullText ?? DEFAULT_CANCELLATION_POLICY;
         pricingType = exp.pricingType;
       }
@@ -819,6 +823,7 @@ async function deliverClaimedConfirmationEntry(
       durationHours: parsed.durationHours ?? 2,
       locationText,
       cancellationPolicyText,
+      logistics,
       isDeposit,
       remainingAlreadyCharged: booking.status === "final_paid",
       finalChargeAt:

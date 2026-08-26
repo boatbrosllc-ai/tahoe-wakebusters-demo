@@ -20,7 +20,9 @@ export type NotificationEventSubtype =
   | "staff_booking_confirmation"
   | "staff_reminder"
   | "staff_final_payment_request"
-  | "staff_final_charge_success";
+  | "staff_final_charge_success"
+  | "admin_crm_email"
+  | "team_invite";
 
 export type NotificationAudience = "customer" | "staff";
 

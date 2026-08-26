@@ -6,6 +6,7 @@ import { listWaiverRequestsQuerySchema } from "@/lib/waiver/schema";
 import { parseSlotId, getSlotStartEnd } from "@/lib/booking/experience-slots";
 import { formatBookingTime } from "@/lib/booking/format-booking-datetime";
 import { waiverRequestDocToAdminJson } from "@/lib/waiver/admin-api-serialize";
+import { requireFeatureResponse } from "@/lib/plan";
 
 type RequestWithId = Awaited<ReturnType<typeof listRequests>>[number];
 
@@ -70,6 +71,12 @@ async function enrichWithBookingSummary(
 }
 
 export async function GET(request: NextRequest) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 

@@ -7,6 +7,7 @@ import {
   listWaiverQrLinksForTemplate,
 } from "@/lib/waiver/waiver-qr-firestore";
 import { buildWaiverQrSignUrl } from "@/lib/waiver/qr-sign-url";
+import { requireFeatureResponse } from "@/lib/plan";
 
 const postBodySchema = z.object({
   label: z.string().optional(),
@@ -18,8 +19,15 @@ const postBodySchema = z.object({
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  {
+  params }: { params: Promise<{ id: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 
@@ -48,8 +56,15 @@ export async function GET(
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  {
+  params }: { params: Promise<{ id: string }> }
 ) {
+  // PLAN_FEATURE_GATE
+  {
+    const planDenied = requireFeatureResponse("waivers");
+    if (planDenied) return planDenied;
+  }
+
   const unauthorized = await requireAdminSession(request.headers.get("cookie"));
   if (unauthorized) return unauthorized;
 
