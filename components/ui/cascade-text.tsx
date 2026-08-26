@@ -42,7 +42,7 @@ const TextReveal = React.memo(function TextReveal({
       const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
       return Array.from(segmenter.segment(text), (s) => s.segment);
     }
-    return [...text];
+    return Array.from(text);
   }, [text]);
 
   const sign = direction === "up" ? 1 : -1;
