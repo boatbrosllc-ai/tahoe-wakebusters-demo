@@ -1,0 +1,23 @@
+name: Deploy Tahoe Wakebusters demo
+
+on:
+  push:
+    branches: [demo/tahoe-wakebusters]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - name: Deploy to Netlify
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: 71f54333-0016-4b84-9103-18b62542888b
+        run: npx netlify-cli deploy --build --prod --message "ci ${{ github.sha }}"
